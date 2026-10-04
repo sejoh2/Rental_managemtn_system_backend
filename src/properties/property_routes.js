@@ -1,0 +1,65 @@
+const express = require("express");
+
+const property_controller = require("./property_controller");
+
+const {
+  authenticate,
+} = require("../auth/auth_middleware");
+
+const {
+  require_role,
+} = require("../middleware/role_middleware");
+
+const router = express.Router();
+
+/*
+  These are public because Safaricom calls them.
+  They must appear before router.use(authenticate).
+*/
+router.post(
+  "/c2b/validation",
+  property_controller.c2b_validation
+);
+
+router.post(
+  "/c2b/confirmation",
+  property_controller.c2b_confirmation
+);
+
+/*
+  Only owners may create, connect, view, or archive their properties.
+*/
+router.use(authenticate);
+router.use(require_role("owner"));
+
+router.post(
+  "/payment-accounts/connect",
+  property_controller.connect_payment_account
+);
+
+router.post(
+  "/:property_id/payment-accounts/:payment_account_id/register-c2b-urls",
+  property_controller.reregister_payment_account_c2b_urls
+);
+
+router.get(
+  "/",
+  property_controller.list_properties
+);
+
+router.get(
+  "/:property_id",
+  property_controller.get_property
+);
+
+router.post(
+  "/",
+  property_controller.create_property
+);
+
+router.delete(
+  "/:property_id",
+  property_controller.archive_property
+);
+
+module.exports = router;

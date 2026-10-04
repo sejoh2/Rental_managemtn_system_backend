@@ -1,0 +1,1072 @@
+const db = require("../config/db");
+
+const {
+  get_caretaker_property_access,
+} = require(
+  "../caretakers/caretaker_access_service"
+);
+
+function service_error(message, status_code = 400) {
+  const error = new Error(message);
+
+  error.status_code = status_code;
+
+  return error;
+}
+
+function as_number(value) {
+  return Number(value || 0);
+}
+
+function date_only(value) {
+  if (!value) {
+    return null;
+  }
+
+  return new Date(value)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function start_of_month(date) {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      1
+    )
+  );
+}
+
+function end_of_month(date) {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      0
+    )
+  );
+}
+
+/*
+  All report periods are inclusive:
+  start_date <= data date <= end_date
+*/
+function resolve_period(period) {
+  const now = new Date();
+
+  let start_date;
+  let end_date;
+
+  if (period === "this_month") {
+    start_date = start_of_month(now);
+    end_date = now;
+  }
+
+  if (period === "last_month") {
+    const previous_month = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth() - 1,
+        1
+      )
+    );
+
+    start_date = start_of_month(previous_month);
+    end_date = end_of_month(previous_month);
+  }
+
+  if (period === "last_3_months") {
+    start_date = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth() - 2,
+        1
+      )
+    );
+
+    end_date = now;
+  }
+
+  if (period === "last_6_months") {
+    start_date = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth() - 5,
+        1
+      )
+    );
+
+    end_date = now;
+  }
+
+  if (period === "this_year") {
+    start_date = new Date(
+      Date.UTC(now.getUTCFullYear(), 0, 1)
+    );
+
+    end_date = now;
+  }
+
+  return {
+    key: period,
+    start_date: date_only(start_date),
+    end_date: date_only(end_date),
+  };
+}
+
+function report_scope(user) {
+  return {
+    owner_id:
+      user.role === "caretaker"
+        ? Number(user.owner_id)
+        : Number(user.user_id),
+
+    is_caretaker: user.role === "caretaker",
+  };
+}
+
+/*
+  Owners may report on all their properties or one selected property.
+
+  Caretakers may view reports only for their assigned property.
+  They must include property_id in every reports request.
+*/
+async function ensure_report_access(
+  client,
+  user,
+  property_id
+) {
+  const scope = report_scope(user);
+
+  if (!scope.is_caretaker) {
+    if (!property_id) {
+      return scope;
+    }
+
+    const property = await client.query(
+      `
+        SELECT id
+        FROM properties
+        WHERE id = $1
+          AND owner_id = $2
+        LIMIT 1
+      `,
+      [
+        property_id,
+        scope.owner_id,
+      ]
+    );
+
+    if (!property.rows[0]) {
+      throw service_error(
+        "Property not found or you do not have access to it.",
+        404
+      );
+    }
+
+    return {
+      ...scope,
+      property_id,
+    };
+  }
+
+  if (!property_id) {
+    throw service_error(
+      "Caretakers must select their assigned property when viewing reports.",
+      422
+    );
+  }
+
+  await get_caretaker_property_access(
+    client,
+    user,
+    property_id,
+    "level_1"
+  );
+
+  return {
+    ...scope,
+    property_id,
+  };
+}
+
+async function get_occupancy_summary(
+  client,
+  owner_id,
+  property_id
+) {
+  const result = await client.query(
+    `
+      SELECT
+        COUNT(units.id)
+          FILTER (
+            WHERE units.status <> 'inactive'
+          ) AS total_units,
+
+        COUNT(units.id)
+          FILTER (
+            WHERE units.status <> 'inactive'
+              AND EXISTS (
+                SELECT 1
+                FROM tenants
+                WHERE tenants.unit_id = units.id
+                  AND tenants.status IN (
+                    'active',
+                    'notice_given'
+                  )
+              )
+          ) AS occupied_units,
+
+        COUNT(units.id)
+          FILTER (
+            WHERE units.status = 'vacant'
+          ) AS vacant_units,
+
+        COUNT(units.id)
+          FILTER (
+            WHERE units.status = 'maintenance'
+          ) AS maintenance_units
+
+      FROM units
+
+      INNER JOIN properties
+        ON properties.id = units.property_id
+
+      WHERE properties.owner_id = $1
+        AND (
+          $2::BIGINT IS NULL
+          OR units.property_id = $2
+        )
+    `,
+    [
+      owner_id,
+      property_id || null,
+    ]
+  );
+
+  const row = result.rows[0];
+
+  const total_units = Number(row.total_units);
+  const occupied_units = Number(row.occupied_units);
+
+  return {
+    total_units,
+    occupied_units,
+    vacant_units: Number(row.vacant_units),
+    maintenance_units: Number(
+      row.maintenance_units
+    ),
+
+    occupancy_rate:
+      total_units > 0
+        ? Number(
+          (
+            (occupied_units / total_units) * 100
+          ).toFixed(1)
+        )
+        : 0,
+  };
+}
+
+/*
+  Current arrears are not restricted to the selected period.
+  An unpaid older bill is still an arrear today.
+*/
+async function get_arrears_by_property(
+  client,
+  owner_id,
+  property_id
+) {
+  const result = await client.query(
+    `
+      SELECT
+        properties.id AS property_id,
+        properties.name AS property_name,
+
+        COALESCE(
+          SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ),
+          0
+        ) AS arrears_amount,
+
+        COUNT(DISTINCT tenant_charges.tenant_id)
+          FILTER (
+            WHERE tenant_charges.status IN (
+              'open',
+              'partial'
+            )
+          ) AS tenants_in_arrears
+
+      FROM properties
+
+      LEFT JOIN tenant_charges
+        ON tenant_charges.property_id = properties.id
+        AND tenant_charges.status IN (
+          'open',
+          'partial'
+        )
+
+      WHERE properties.owner_id = $1
+        AND (
+          $2::BIGINT IS NULL
+          OR properties.id = $2
+        )
+
+      GROUP BY
+        properties.id,
+        properties.name
+
+      ORDER BY
+        arrears_amount DESC,
+        properties.name ASC
+    `,
+    [
+      owner_id,
+      property_id || null,
+    ]
+  );
+
+  return result.rows.map((row) => ({
+    property_id: Number(row.property_id),
+    property_name: row.property_name,
+
+    arrears_amount: as_number(
+      row.arrears_amount
+    ),
+
+    tenants_in_arrears: Number(
+      row.tenants_in_arrears
+    ),
+  }));
+}
+
+/*
+  Rent and water collection are calculated from allocations,
+  rather than merely the payment account. This avoids treating
+  deposits as monthly rent/water income.
+*/
+async function get_collection_summary(
+  client,
+  owner_id,
+  property_id,
+  period
+) {
+  const result = await client.query(
+    `
+      WITH allocations AS (
+        SELECT
+          tenant_charges.charge_type,
+          payment_allocations.amount
+
+        FROM payment_allocations
+
+        INNER JOIN payments
+          ON payments.id =
+            payment_allocations.payment_id
+
+        INNER JOIN tenant_charges
+          ON tenant_charges.id =
+            payment_allocations.tenant_charge_id
+
+        WHERE payments.owner_id = $1
+          AND payments.status = 'matched'
+
+          AND payments.received_at::DATE >= $2
+          AND payments.received_at::DATE <= $3
+
+          AND (
+            $4::BIGINT IS NULL
+            OR payments.property_id = $4
+          )
+      )
+
+      SELECT
+        COALESCE(
+          SUM(amount)
+            FILTER (
+              WHERE charge_type = 'rent'
+            ),
+          0
+        ) AS rent_collected,
+
+        COALESCE(
+          SUM(amount)
+            FILTER (
+              WHERE charge_type = 'water'
+            ),
+          0
+        ) AS water_collected,
+
+        COALESCE(
+          SUM(amount)
+            FILTER (
+              WHERE charge_type = 'rent_deposit'
+            ),
+          0
+        ) AS rent_deposits_collected,
+
+        COALESCE(
+          SUM(amount)
+            FILTER (
+              WHERE charge_type = 'water_deposit'
+            ),
+          0
+        ) AS water_deposits_collected
+      FROM allocations
+    `,
+    [
+      owner_id,
+      period.start_date,
+      period.end_date,
+      property_id || null,
+    ]
+  );
+
+  const row = result.rows[0];
+
+  return {
+    rent_collected: as_number(
+      row.rent_collected
+    ),
+
+    water_collected: as_number(
+      row.water_collected
+    ),
+
+    rent_deposits_collected: as_number(
+      row.rent_deposits_collected
+    ),
+
+    water_deposits_collected: as_number(
+      row.water_deposits_collected
+    ),
+  };
+}
+
+async function get_water_summary(
+  client,
+  owner_id,
+  property_id,
+  period
+) {
+  const result = await client.query(
+    `
+      SELECT
+        COALESCE(
+          SUM(tenant_charges.amount_due),
+          0
+        ) AS water_billed,
+
+        COALESCE(
+          SUM(tenant_charges.amount_paid),
+          0
+        ) AS water_paid,
+
+        COALESCE(
+          SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ),
+          0
+        ) AS water_outstanding,
+
+        COUNT(*)
+          FILTER (
+            WHERE tenant_charges.status IN (
+              'open',
+              'partial'
+            )
+          ) AS open_water_bills,
+
+        (
+          SELECT COUNT(*)
+          FROM water_meter_readings
+          WHERE water_meter_readings.owner_id = $1
+
+            AND water_meter_readings.billing_period >= $2
+            AND water_meter_readings.billing_period <= $3
+
+            AND (
+              $4::BIGINT IS NULL
+              OR water_meter_readings.property_id = $4
+            )
+        ) AS meter_readings_submitted,
+
+        (
+          SELECT COUNT(*)
+          FROM water_meter_readings
+          WHERE water_meter_readings.owner_id = $1
+
+            AND water_meter_readings.billing_period >= $2
+            AND water_meter_readings.billing_period <= $3
+
+            AND water_meter_readings.status = 'flagged'
+
+            AND (
+              $4::BIGINT IS NULL
+              OR water_meter_readings.property_id = $4
+            )
+        ) AS flagged_readings
+
+      FROM tenant_charges
+
+      WHERE tenant_charges.owner_id = $1
+        AND tenant_charges.charge_type = 'water'
+
+        AND tenant_charges.billing_period >= $2
+        AND tenant_charges.billing_period <= $3
+
+        AND (
+          $4::BIGINT IS NULL
+          OR tenant_charges.property_id = $4
+        )
+    `,
+    [
+      owner_id,
+      period.start_date,
+      period.end_date,
+      property_id || null,
+    ]
+  );
+
+  const row = result.rows[0];
+
+  return {
+    water_billed: as_number(row.water_billed),
+
+    water_paid: as_number(row.water_paid),
+
+    water_outstanding: as_number(
+      row.water_outstanding
+    ),
+
+    open_water_bills: Number(
+      row.open_water_bills
+    ),
+
+    meter_readings_submitted: Number(
+      row.meter_readings_submitted
+    ),
+
+    flagged_readings: Number(
+      row.flagged_readings
+    ),
+  };
+}
+
+async function get_expense_summary(
+  client,
+  owner_id,
+  property_id,
+  period
+) {
+  const result = await client.query(
+    `
+      SELECT
+        COALESCE(SUM(expenses.amount), 0)
+          AS total_expenses,
+
+        COUNT(expenses.id)
+          AS expense_count
+
+      FROM expenses
+
+      WHERE expenses.owner_id = $1
+        AND expenses.status = 'recorded'
+
+        AND expenses.expense_date >= $2
+        AND expenses.expense_date <= $3
+
+        AND (
+          $4::BIGINT IS NULL
+          OR expenses.property_id = $4
+        )
+    `,
+    [
+      owner_id,
+      period.start_date,
+      period.end_date,
+      property_id || null,
+    ]
+  );
+
+  return {
+    total_expenses: as_number(
+      result.rows[0].total_expenses
+    ),
+
+    expense_count: Number(
+      result.rows[0].expense_count
+    ),
+  };
+}
+
+/*
+  SMS Centre must be initialized before Reports.
+  It reads the real individual SMS records, not an estimate.
+*/
+async function get_sms_usage(
+  client,
+  owner_id,
+  property_id,
+  period
+) {
+  const result = await client.query(
+    `
+      SELECT
+        COUNT(*) AS total_messages,
+
+        COUNT(*)
+          FILTER (
+            WHERE sms_messages.status = 'accepted'
+          ) AS accepted_messages,
+
+        COUNT(*)
+          FILTER (
+            WHERE sms_messages.status = 'failed'
+          ) AS failed_messages,
+
+        COUNT(*)
+          FILTER (
+            WHERE sms_messages.status = 'queued'
+          ) AS queued_messages,
+
+        COALESCE(
+          SUM(sms_messages.estimated_cost)
+            FILTER (
+              WHERE sms_messages.status = 'accepted'
+            ),
+          0
+        ) AS sms_cost
+
+      FROM sms_messages
+
+      WHERE sms_messages.owner_id = $1
+
+        AND sms_messages.created_at::DATE >= $2
+        AND sms_messages.created_at::DATE <= $3
+
+        AND (
+          $4::BIGINT IS NULL
+          OR sms_messages.property_id = $4
+        )
+    `,
+    [
+      owner_id,
+      period.start_date,
+      period.end_date,
+      property_id || null,
+    ]
+  );
+
+  const row = result.rows[0];
+
+  const total_messages = Number(
+    row.total_messages
+  );
+
+  const accepted_messages = Number(
+    row.accepted_messages
+  );
+
+  return {
+    total_messages,
+    accepted_messages,
+
+    failed_messages: Number(
+      row.failed_messages
+    ),
+
+    queued_messages: Number(
+      row.queued_messages
+    ),
+
+    delivery_rate:
+      total_messages > 0
+        ? Number(
+          (
+            (accepted_messages / total_messages) *
+            100
+          ).toFixed(1)
+        )
+        : 0,
+
+    sms_cost: as_number(row.sms_cost),
+  };
+}
+
+async function get_dashboard_report(
+  user,
+  filters
+) {
+  const client = await db.get_client();
+
+  try {
+    const access = await ensure_report_access(
+      client,
+      user,
+      filters.property_id
+    );
+
+    const period = resolve_period(filters.period);
+
+    const [
+      occupancy,
+      arrears_by_property,
+      collection,
+      water,
+      expenses,
+      sms,
+    ] = await Promise.all([
+      get_occupancy_summary(
+        client,
+        access.owner_id,
+        access.property_id
+      ),
+
+      get_arrears_by_property(
+        client,
+        access.owner_id,
+        access.property_id
+      ),
+
+      get_collection_summary(
+        client,
+        access.owner_id,
+        access.property_id,
+        period
+      ),
+
+      get_water_summary(
+        client,
+        access.owner_id,
+        access.property_id,
+        period
+      ),
+
+      get_expense_summary(
+        client,
+        access.owner_id,
+        access.property_id,
+        period
+      ),
+
+      get_sms_usage(
+        client,
+        access.owner_id,
+        access.property_id,
+        period
+      ),
+    ]);
+
+    const total_arrears = arrears_by_property.reduce(
+      (total, item) =>
+        total + item.arrears_amount,
+      0
+    );
+
+    return {
+      property_id:
+        access.property_id || null,
+
+      period,
+
+      occupancy,
+
+      arrears: {
+        total_arrears,
+        by_property: arrears_by_property,
+      },
+
+      collection,
+
+      water,
+
+      expenses: {
+        ...expenses,
+
+        /*
+          Deposits are excluded from operational profit.
+        */
+        net_operating_income:
+          collection.rent_collected +
+          collection.water_collected -
+          expenses.total_expenses,
+      },
+
+      sms,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+async function get_tenant_statement(
+  user,
+  tenant_id,
+  filters
+) {
+  const client = await db.get_client();
+
+  try {
+    const scope = report_scope(user);
+
+    const tenant_result = await client.query(
+      `
+        SELECT
+          tenants.*,
+
+          properties.name AS property_name,
+
+          units.unit_number
+
+        FROM tenants
+
+        INNER JOIN properties
+          ON properties.id = tenants.property_id
+
+        INNER JOIN units
+          ON units.id = tenants.unit_id
+
+        WHERE tenants.id = $1
+          AND tenants.owner_id = $2
+
+        LIMIT 1
+      `,
+      [
+        tenant_id,
+        scope.owner_id,
+      ]
+    );
+
+    const tenant = tenant_result.rows[0];
+
+    if (!tenant) {
+      throw service_error(
+        "Tenant not found or you do not have access to them.",
+        404
+      );
+    }
+
+    if (scope.is_caretaker) {
+      await get_caretaker_property_access(
+        client,
+        user,
+        tenant.property_id,
+        "level_1"
+      );
+    }
+
+    const period = resolve_period(filters.period);
+
+    /*
+      Include charges created in the selected period, plus every
+      outstanding charge even if it began in an earlier period.
+      This prevents old unpaid deposits/rent disappearing from a statement.
+    */
+    const charges_result = await client.query(
+      `
+        SELECT
+          tenant_charges.*,
+
+          (
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ) AS balance
+
+        FROM tenant_charges
+
+        WHERE tenant_charges.tenant_id = $1
+
+          AND (
+            (
+              tenant_charges.created_at::DATE >= $2
+              AND tenant_charges.created_at::DATE <= $3
+            )
+
+            OR tenant_charges.status IN (
+              'open',
+              'partial'
+            )
+          )
+
+        ORDER BY
+          tenant_charges.due_date ASC,
+          tenant_charges.id ASC
+      `,
+      [
+        tenant_id,
+        period.start_date,
+        period.end_date,
+      ]
+    );
+
+    const payments_result = await client.query(
+      `
+        SELECT
+          payments.*,
+
+          COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'charge_type',
+                tenant_charges.charge_type,
+
+                'billing_period',
+                tenant_charges.billing_period,
+
+                'amount',
+                payment_allocations.amount
+              )
+              ORDER BY payment_allocations.id
+            ) FILTER (
+              WHERE payment_allocations.id IS NOT NULL
+            ),
+            '[]'::JSON
+          ) AS applied_to
+
+        FROM payments
+
+        LEFT JOIN payment_allocations
+          ON payment_allocations.payment_id =
+            payments.id
+
+        LEFT JOIN tenant_charges
+          ON tenant_charges.id =
+            payment_allocations.tenant_charge_id
+
+        WHERE payments.tenant_id = $1
+          AND payments.status = 'matched'
+
+          AND payments.received_at::DATE >= $2
+          AND payments.received_at::DATE <= $3
+
+        GROUP BY payments.id
+
+        ORDER BY
+          payments.received_at ASC,
+          payments.id ASC
+      `,
+      [
+        tenant_id,
+        period.start_date,
+        period.end_date,
+      ]
+    );
+
+    const balances_result = await client.query(
+      `
+        SELECT
+          COALESCE(
+            SUM(
+              tenant_charges.amount_due -
+              tenant_charges.amount_paid
+            ),
+            0
+          ) AS outstanding_balance,
+
+          COALESCE(
+            (
+              SELECT SUM(tenant_credits.remaining_amount)
+              FROM tenant_credits
+              WHERE tenant_credits.tenant_id = $1
+                AND tenant_credits.remaining_amount > 0
+            ),
+            0
+          ) AS credit_balance
+
+        FROM tenant_charges
+
+        WHERE tenant_charges.tenant_id = $1
+          AND tenant_charges.status IN (
+            'open',
+            'partial'
+          )
+      `,
+      [tenant_id]
+    );
+
+    const balance = balances_result.rows[0];
+
+    return {
+      tenant: {
+        id: Number(tenant.id),
+
+        owner_id: Number(tenant.owner_id),
+
+        property_id: Number(tenant.property_id),
+        property_name: tenant.property_name,
+
+        unit_id: Number(tenant.unit_id),
+        unit_number: tenant.unit_number,
+
+        full_name: tenant.full_name,
+        payment_phone: tenant.payment_phone,
+
+        email: tenant.email,
+
+        move_in_date: tenant.move_in_date,
+        status: tenant.status,
+      },
+
+      period,
+
+      charges: charges_result.rows.map((charge) => ({
+        id: Number(charge.id),
+
+        charge_type: charge.charge_type,
+        billing_period: charge.billing_period,
+        due_date: charge.due_date,
+
+        amount_due: as_number(
+          charge.amount_due
+        ),
+
+        amount_paid: as_number(
+          charge.amount_paid
+        ),
+
+        balance: as_number(charge.balance),
+        status: charge.status,
+
+        created_at: charge.created_at,
+      })),
+
+      payments: payments_result.rows.map((payment) => ({
+        id: Number(payment.id),
+
+        amount: as_number(payment.amount),
+
+        payment_method: payment.payment_method,
+        payment_source: payment.payment_source,
+
+        provider_transaction_id:
+          payment.provider_transaction_id,
+
+        reference: payment.reference,
+
+        received_at: payment.received_at,
+
+        applied_to: payment.applied_to || [],
+      })),
+
+      outstanding_balance: as_number(
+        balance.outstanding_balance
+      ),
+
+      credit_balance: as_number(
+        balance.credit_balance
+      ),
+    };
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  get_dashboard_report,
+  get_tenant_statement,
+};

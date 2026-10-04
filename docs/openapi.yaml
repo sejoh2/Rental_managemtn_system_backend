@@ -1,0 +1,2711 @@
+openapi: 3.0.3
+
+info:
+  title: Kodi Rental Management API
+  version: 1.0.0
+  description: |
+    Backend API for Kodi Rental Management System.
+
+    Recommended implementation order:
+    1. Authentication
+    2. Admin owner promotion
+    3. Property and M-Pesa account setup
+    4. Units and tenants
+    5. Payments and M-Pesa C2B callbacks
+    6. Water billing
+    7. Agreements
+    8. Expenses and maintenance
+    9. Caretakers
+    10. SMS Centre
+    11. Reports
+    12. Settings
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Health
+  - name: Step 1 - Authentication
+  - name: Step 2 - Admin users
+  - name: Step 3 - Properties and M-Pesa
+  - name: Step 4 - Units
+  - name: Step 5 - Tenants
+  - name: Step 6 - Payments
+  - name: Step 7 - Water billing
+  - name: Step 8 - Agreements
+  - name: Step 9 - Expenses
+  - name: Step 10 - Maintenance
+  - name: Step 11 - Caretakers
+  - name: Step 12 - SMS Centre
+  - name: Step 13 - Reports
+  - name: Step 14 - Settings
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Check backend health
+      responses:
+        "200":
+          description: Backend is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/auth/request-otp:
+    post:
+      tags: [Step 1 - Authentication]
+      summary: Request OTP sign-in code
+      description: |
+        Creates an OTP request. New verified phone numbers become normal `user` accounts.
+        Limited to five requests per 15 minutes per client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OtpRequest"
+      responses:
+        "200":
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OtpRequestResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+  /api/auth/verify-otp:
+    post:
+      tags: [Step 1 - Authentication]
+      summary: Verify OTP and authenticate
+      description: |
+        Returns an access token and refresh token. A new phone becomes a normal `user`;
+        an admin can later promote that user to `owner`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OtpVerification"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+  /api/auth/refresh-token:
+    post:
+      tags: [Step 1 - Authentication]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Tokens refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  /api/auth/logout:
+    post:
+      tags: [Step 1 - Authentication]
+      summary: Log out and revoke refresh token
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/auth/me:
+    get:
+      tags: [Step 1 - Authentication]
+      summary: Get current authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUserResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  /api/users:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: List all users
+      description: Admin only.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+  /api/users/{user_id}:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: Get user by ID
+      description: Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /api/users/{user_id}/promote-owner:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Promote normal user to owner
+      description: |
+        Admin only. Target must be an active normal `user`.
+        A person cannot self-register as an owner.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User promoted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /api/users/{user_id}/deactivate:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Deactivate user
+      description: Admin only. Revokes their refresh-token sessions.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User deactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /api/users/{user_id}/activate:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Activate inactive or suspended user
+      description: Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User activated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /api/properties/c2b/validation:
+    post:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Daraja C2B validation callback
+      description: Public callback called by Safaricom Daraja. No bearer token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DarajaC2BCallback"
+      responses:
+        "200":
+          description: Accepted by Kodi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DarajaAcceptedResponse"
+
+  /api/properties/c2b/confirmation:
+    post:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Daraja C2B confirmation callback
+      description: |
+        Public callback called by Safaricom Daraja after a payment.
+        The backend identifies the property account, matches tenant payment phone,
+        creates a payment, and applies money deposit-first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DarajaC2BCallback"
+      responses:
+        "200":
+          description: Accepted by Kodi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DarajaAcceptedResponse"
+
+  /api/properties/payment-accounts/connect:
+    post:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Validate M-Pesa account credentials before property creation
+      description: Owner only. Returns a short-lived connection ID required in property creation.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectPaymentAccountRequest"
+      responses:
+        "200":
+          description: M-Pesa credentials validated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentConnectionResponse"
+
+  /api/properties:
+    get:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: List owner properties
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Properties
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyListResponse"
+
+    post:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Create property with Rent and Water M-Pesa accounts
+      description: |
+        Owner only. Both M-Pesa connections must have been validated first.
+        Use two different `rent_connection_id` and `water_connection_id` values.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePropertyRequest"
+      responses:
+        "201":
+          description: Property and payment accounts created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+  /api/properties/{property_id}:
+    get:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Get property and payment account details
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Property
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+    delete:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Archive property
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Property archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/properties/{property_id}/payment-accounts/{payment_account_id}/register-c2b-urls:
+    post:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Re-register Daraja callback URLs
+      description: |
+        Owner only. Use after `PUBLIC_API_URL` changes, such as after restarting
+        a free ngrok tunnel.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - $ref: "#/components/parameters/PaymentAccountId"
+      responses:
+        "200":
+          description: C2B URLs registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/units:
+    get:
+      tags: [Step 4 - Units]
+      summary: List units in property
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Units
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitListResponse"
+
+    post:
+      tags: [Step 4 - Units]
+      summary: Create unit
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUnitRequest"
+      responses:
+        "201":
+          description: Unit created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitResponse"
+
+  /api/units/{unit_id}:
+    get:
+      tags: [Step 4 - Units]
+      summary: Get unit
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UnitId"
+      responses:
+        "200":
+          description: Unit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitResponse"
+
+    patch:
+      tags: [Step 4 - Units]
+      summary: Update unit
+      description: Unit cannot be manually set to `occupied`; tenant move-in controls occupancy.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUnitRequest"
+      responses:
+        "200":
+          description: Unit updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitResponse"
+
+    delete:
+      tags: [Step 4 - Units]
+      summary: Archive unit
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UnitId"
+      responses:
+        "200":
+          description: Unit archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/properties/{property_id}/tenants:
+    get:
+      tags: [Step 5 - Tenants]
+      summary: List tenants in property
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
+
+    post:
+      tags: [Step 5 - Tenants]
+      summary: Add tenant to a unit
+      description: |
+        Unit becomes occupied immediately. Rent, rent deposit, and fixed KES 2,000
+        water deposit are copied from the unit and become initial tenant charges.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+
+  /api/tenants/{tenant_id}:
+    get:
+      tags: [Step 5 - Tenants]
+      summary: Get tenant profile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+
+    patch:
+      tags: [Step 5 - Tenants]
+      summary: Update tenant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantRequest"
+      responses:
+        "200":
+          description: Tenant updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+
+  /api/tenants/{tenant_id}/move-out:
+    post:
+      tags: [Step 5 - Tenants]
+      summary: Move tenant out
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveOutRequest"
+      responses:
+        "200":
+          description: Tenant moved out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+
+  /api/payments:
+    get:
+      tags: [Step 6 - Payments]
+      summary: List owner payments
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentListResponse"
+
+  /api/payments/stats:
+    get:
+      tags: [Step 6 - Payments]
+      summary: Get payment statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Payment statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/payments/unmatched:
+    get:
+      tags: [Step 6 - Payments]
+      summary: List unmatched payments
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Unmatched payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentListResponse"
+
+  /api/payments/{payment_id}:
+    get:
+      tags: [Step 6 - Payments]
+      summary: Get payment and allocations
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Payment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/payments/{payment_id}/match:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Manually match unmatched payment to tenant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MatchPaymentRequest"
+      responses:
+        "200":
+          description: Payment matched and allocated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/payments:
+    get:
+      tags: [Step 6 - Payments]
+      summary: List tenant payments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Tenant payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentListResponse"
+
+  /api/tenants/{tenant_id}/payments/manual:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Record manual tenant payment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManualPaymentRequest"
+      responses:
+        "201":
+          description: Payment recorded and allocated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/payments/mpesa/sandbox/simulate:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Submit Daraja sandbox simulation
+      description: Development/sandbox only. Daraja may accept this request but dispatch the confirmation callback asynchronously.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SandboxSimulationRequest"
+      responses:
+        "200":
+          description: Daraja accepted simulation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/water-billing-rules:
+    put:
+      tags: [Step 7 - Water billing]
+      summary: Update property water billing rules
+      description: Updates the real property and unit water-rule data used for readings and bills.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WaterRulesRequest"
+      responses:
+        "200":
+          description: Rules updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/water-readings:
+    get:
+      tags: [Step 7 - Water billing]
+      summary: List water readings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - name: billing_period
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [submitted, flagged, rejected]
+      responses:
+        "200":
+          description: Readings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/water-billing/stats:
+    get:
+      tags: [Step 7 - Water billing]
+      summary: Get water billing statistics
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - name: billing_period
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Water statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/units/{unit_id}/water-readings:
+    post:
+      tags: [Step 7 - Water billing]
+      summary: Submit meter reading
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - $ref: "#/components/parameters/UnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WaterReadingRequest"
+      responses:
+        "201":
+          description: Reading submitted or flagged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/water-bills/generate-fixed:
+    post:
+      tags: [Step 7 - Water billing]
+      summary: Generate fixed monthly water bills
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [billing_period]
+              properties:
+                billing_period:
+                  type: string
+                  format: date
+                  example: "2026-10-01"
+      responses:
+        "200":
+          description: Fixed bills generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/water-readings/{reading_id}/review:
+    patch:
+      tags: [Step 7 - Water billing]
+      summary: Approve or reject water reading
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ReadingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewWaterReadingRequest"
+      responses:
+        "200":
+          description: Reading reviewed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreement-templates/default:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Get owner default agreement template
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Default template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    put:
+      tags: [Step 8 - Agreements]
+      summary: Save owner default agreement template
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgreementTemplateRequest"
+      responses:
+        "200":
+          description: Template saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/agreement-template:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Get property agreement template and default fallback
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Agreement template information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    put:
+      tags: [Step 8 - Agreements]
+      summary: Save property agreement template override
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgreementTemplateRequest"
+      responses:
+        "200":
+          description: Template saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    delete:
+      tags: [Step 8 - Agreements]
+      summary: Remove property template override
+      description: Property returns to using owner default template.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Property template removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/agreements:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: List agreements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [awaiting_signature, signed]
+      responses:
+        "200":
+          description: Agreements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreements/{agreement_id}:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Get agreement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AgreementId"
+      responses:
+        "200":
+          description: Agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreements/{agreement_id}/sign:
+    patch:
+      tags: [Step 8 - Agreements]
+      summary: Mark agreement signed
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AgreementId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                signed_at:
+                  type: string
+                  format: date
+                signed_notes:
+                  type: string
+      responses:
+        "200":
+          description: Agreement signed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreements/{agreement_id}/download:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Download agreement PDF
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AgreementId"
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /api/tenants/{tenant_id}/agreement:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Get tenant agreement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Tenant agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/agreement/generate:
+    post:
+      tags: [Step 8 - Agreements]
+      summary: Generate agreement for existing tenant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "201":
+          description: Agreement generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/agreement/download:
+    get:
+      tags: [Step 8 - Agreements]
+      summary: Download tenant agreement PDF
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /api/properties/{property_id}/expenses:
+    post:
+      tags: [Step 9 - Expenses]
+      summary: Record expense
+      description: Owner or assigned caretaker.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpenseRequest"
+      responses:
+        "201":
+          description: Expense recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/expenses:
+    get:
+      tags: [Step 9 - Expenses]
+      summary: List expenses
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExpenseFilters"
+      responses:
+        "200":
+          description: Expenses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/expenses/summary:
+    get:
+      tags: [Step 9 - Expenses]
+      summary: Get income, expenses, and net-profit summary
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExpenseFilters"
+      responses:
+        "200":
+          description: Expense summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/expenses/{expense_id}:
+    get:
+      tags: [Step 9 - Expenses]
+      summary: Get expense
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExpenseId"
+      responses:
+        "200":
+          description: Expense
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/expenses/{expense_id}/void:
+    post:
+      tags: [Step 9 - Expenses]
+      summary: Void expense
+      description: Owner only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExpenseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [void_reason]
+              properties:
+                void_reason:
+                  type: string
+                  minLength: 2
+      responses:
+        "200":
+          description: Expense voided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/maintenance/counts:
+    get:
+      tags: [Step 10 - Maintenance]
+      summary: Get maintenance counts by status
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/maintenance:
+    get:
+      tags: [Step 10 - Maintenance]
+      summary: List maintenance requests
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema:
+            type: integer
+        - name: unit_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [reported, in_progress, resolved, cancelled]
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [low, normal, high, urgent]
+      responses:
+        "200":
+          description: Requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/maintenance/{request_id}:
+    get:
+      tags: [Step 10 - Maintenance]
+      summary: Get maintenance request
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceRequestId"
+      responses:
+        "200":
+          description: Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    patch:
+      tags: [Step 10 - Maintenance]
+      summary: Update maintenance request
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMaintenanceRequest"
+      responses:
+        "200":
+          description: Request updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/maintenance:
+    post:
+      tags: [Step 10 - Maintenance]
+      summary: Create maintenance request
+      description: Owner or assigned caretaker.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMaintenanceRequest"
+      responses:
+        "201":
+          description: Request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/caretakers:
+    get:
+      tags: [Step 11 - Caretakers]
+      summary: List owner caretakers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Caretakers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/caretakers/{caretaker_id}:
+    get:
+      tags: [Step 11 - Caretakers]
+      summary: Get caretaker profile and activity
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CaretakerId"
+      responses:
+        "200":
+          description: Caretaker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/caretaker:
+    post:
+      tags: [Step 11 - Caretakers]
+      summary: Assign or replace property caretaker
+      description: |
+        The person must first authenticate through OTP as a normal user.
+        Each property has one active caretaker. This assigns Level 1 or Level 2 access.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignCaretakerRequest"
+      responses:
+        "201":
+          description: Caretaker assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    patch:
+      tags: [Step 11 - Caretakers]
+      summary: Update, suspend, or reactivate property caretaker
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCaretakerRequest"
+      responses:
+        "200":
+          description: Caretaker updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/stats:
+    get:
+      tags: [Step 12 - SMS Centre]
+      summary: Get SMS Centre statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SMS statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/recipients/estimate:
+    post:
+      tags: [Step 12 - SMS Centre]
+      summary: Estimate SMS recipients and cost
+      description: Uses real active tenant balances and tenant credits.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SmsRecipientTarget"
+      responses:
+        "200":
+          description: Recipient count and estimated cost
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/templates:
+    get:
+      tags: [Step 12 - SMS Centre]
+      summary: List saved SMS templates
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Templates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    post:
+      tags: [Step 12 - SMS Centre]
+      summary: Create SMS template
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SmsTemplateRequest"
+      responses:
+        "201":
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/templates/{template_id}:
+    patch:
+      tags: [Step 12 - SMS Centre]
+      summary: Update SMS template
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TemplateId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SmsTemplateRequest"
+      responses:
+        "200":
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    delete:
+      tags: [Step 12 - SMS Centre]
+      summary: Delete SMS template
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TemplateId"
+      responses:
+        "200":
+          description: Template deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/sms/broadcasts:
+    get:
+      tags: [Step 12 - SMS Centre]
+      summary: List SMS broadcasts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [scheduled, sending, completed, partially_failed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Broadcasts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    post:
+      tags: [Step 12 - SMS Centre]
+      summary: Create immediate or scheduled broadcast
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSmsBroadcastRequest"
+      responses:
+        "201":
+          description: Broadcast queued or scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/broadcasts/{broadcast_id}/cancel:
+    post:
+      tags: [Step 12 - SMS Centre]
+      summary: Cancel scheduled broadcast
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BroadcastId"
+      responses:
+        "200":
+          description: Broadcast cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/messages:
+    get:
+      tags: [Step 12 - SMS Centre]
+      summary: List individual SMS message records
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema:
+            type: integer
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, accepted, failed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: SMS records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/sms/messages/{message_id}/retry:
+    post:
+      tags: [Step 12 - SMS Centre]
+      summary: Retry failed SMS message
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SmsMessageId"
+      responses:
+        "200":
+          description: Retry queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/reports/dashboard:
+    get:
+      tags: [Step 13 - Reports]
+      summary: Get dashboard report
+      description: |
+        Owners may request all their properties or one property.
+        Caretakers must provide their assigned `property_id`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ReportPropertyId"
+        - $ref: "#/components/parameters/ReportPeriod"
+      responses:
+        "200":
+          description: Occupancy, arrears, collection, water, expense, and SMS data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/reports/export:
+    get:
+      tags: [Step 13 - Reports]
+      summary: Export report as PDF or CSV
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            default: full_monthly_summary
+            enum: [full_monthly_summary, rent_collection, water_billing, occupancy_arrears, sms_usage]
+        - $ref: "#/components/parameters/ReportPropertyId"
+        - $ref: "#/components/parameters/ReportPeriod"
+        - name: format
+          in: query
+          schema:
+            type: string
+            default: pdf
+            enum: [pdf, csv]
+      responses:
+        "200":
+          description: Report file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
+  /api/reports/tenants/{tenant_id}/statement:
+    get:
+      tags: [Step 13 - Reports]
+      summary: Get tenant statement data
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/ReportPeriod"
+      responses:
+        "200":
+          description: Tenant charges, payments, balance, and credit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/reports/tenants/{tenant_id}/statement/download:
+    get:
+      tags: [Step 13 - Reports]
+      summary: Download tenant statement PDF
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/ReportPeriod"
+      responses:
+        "200":
+          description: PDF statement
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /api/settings:
+    get:
+      tags: [Step 14 - Settings]
+      summary: Get owner profile, defaults, and notification preferences
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Owner settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/settings/profile:
+    patch:
+      tags: [Step 14 - Settings]
+      summary: Update owner profile
+      description: |
+        Phone is not editable here because it is the OTP login identity.
+        Changing a phone requires a future OTP-confirmed phone-change flow.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/settings/defaults:
+    patch:
+      tags: [Step 14 - Settings]
+      summary: Update owner defaults
+      description: Default rent due day affects future setup; existing property settings remain separate.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OwnerDefaultsRequest"
+      responses:
+        "200":
+          description: Defaults updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/settings/notifications:
+    patch:
+      tags: [Step 14 - Settings]
+      summary: Update notification preferences
+      description: Stores preferences. Automation delivery must be separately enabled by scheduled jobs.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationPreferencesRequest"
+      responses:
+        "200":
+          description: Preferences updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/settings/audit-logs:
+    get:
+      tags: [Step 14 - Settings]
+      summary: List owner and caretaker audit activity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 30
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/settings/properties/{property_id}:
+    get:
+      tags: [Step 14 - Settings]
+      summary: Get property settings context
+      description: |
+        Returns real property, unit summary, payment-account, and caretaker context.
+        Water rules and payment accounts remain managed through their existing endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Property settings context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    PropertyId:
+      name: property_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    PaymentAccountId:
+      name: payment_account_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    UnitId:
+      name: unit_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    TenantId:
+      name: tenant_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    PaymentId:
+      name: payment_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    ReadingId:
+      name: reading_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    AgreementId:
+      name: agreement_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    ExpenseId:
+      name: expense_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    MaintenanceRequestId:
+      name: request_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    CaretakerId:
+      name: caretaker_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    TemplateId:
+      name: template_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    BroadcastId:
+      name: broadcast_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    SmsMessageId:
+      name: message_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+    ReportPropertyId:
+      name: property_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+
+    ReportPeriod:
+      name: period
+      in: query
+      required: false
+      schema:
+        type: string
+        default: this_month
+        enum: [this_month, last_month, last_3_months, last_6_months, this_year]
+
+    ExpenseFilters:
+      name: property_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    UnauthorizedError:
+      description: Missing, invalid, or expired access token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    ForbiddenError:
+      description: User lacks the required role or property permission
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    ValidationError:
+      description: Request data is invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorResponse"
+
+    RateLimitError:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        status: { type: string, example: healthy }
+        message: { type: string, example: Rental Management Backend is running }
+
+    SuccessMessage:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+
+    SuccessDataResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data: {}
+
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error: { type: string, example: Request failed. }
+
+    ValidationErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - type: object
+          properties:
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+    OtpRequest:
+      type: object
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          example: "0712345678"
+
+    OtpVerification:
+      type: object
+      required: [phone, code]
+      properties:
+        phone:
+          type: string
+          example: "0712345678"
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+          example: "123456"
+
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    OtpRequestResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: Verification code sent to +254712***678. }
+        expires_in_seconds: { type: integer, example: 300 }
+        resend_in_seconds: { type: integer, example: 60 }
+
+    User:
+      type: object
+      properties:
+        user_id: { type: integer, example: 3 }
+        first_name: { type: string, example: Mary }
+        last_name: { type: string, example: Wanjiru }
+        phone: { type: string, example: "+254712345678" }
+        email:
+          type: string
+          nullable: true
+          example: mary@example.com
+        role:
+          type: string
+          enum: [admin, user, owner, caretaker]
+        owner_id:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+
+    AuthResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: Authenticated successfully. }
+        user:
+          $ref: "#/components/schemas/User"
+        access_token: { type: string }
+        refresh_token: { type: string }
+
+    CurrentUserResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        user:
+          $ref: "#/components/schemas/User"
+
+    UserResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: "#/components/schemas/User"
+
+    UserListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+    MpesaCredentials:
+      type: object
+      required: [consumer_key, consumer_secret]
+      properties:
+        consumer_key:
+          type: string
+        consumer_secret:
+          type: string
+          format: password
+
+    MpesaAccount:
+      type: object
+      required: [provider_code, account_type, business_number, environment, credentials]
+      properties:
+        provider_code:
+          type: string
+          enum: [mpesa]
+        account_type:
+          type: string
+          enum: [paybill, till]
+        business_number:
+          type: string
+          example: "600990"
+        display_name:
+          type: string
+          example: Sandbox Rent
+        account_name:
+          type: string
+          example: Green View Apartments
+        environment:
+          type: string
+          enum: [sandbox, production]
+        credentials:
+          $ref: "#/components/schemas/MpesaCredentials"
+
+    ConnectPaymentAccountRequest:
+      type: object
+      required: [account_for, account]
+      properties:
+        account_for:
+          type: string
+          enum: [rent, water]
+        account:
+          $ref: "#/components/schemas/MpesaAccount"
+
+    PaymentConnectionResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data:
+          type: object
+          properties:
+            connection_id:
+              type: string
+              format: uuid
+            account_for:
+              type: string
+              enum: [rent, water]
+            expires_at:
+              type: string
+              format: date-time
+
+    CreatePropertyRequest:
+      type: object
+      required:
+        - name
+        - location
+        - rent_connection_id
+        - water_connection_id
+      properties:
+        name: { type: string, example: Green View Apartments }
+        location: { type: string, example: Kilimani, Nairobi }
+        property_type:
+          type: string
+          enum: [apartment_block, bedsitters, mixed_use, single_rooms]
+          default: apartment_block
+        expected_units: { type: integer, minimum: 0, example: 24 }
+        rent_due_day: { type: string, example: 5th of every month }
+        sms_sender_id:
+          type: string
+          nullable: true
+          example: KODI
+        water_billing_method:
+          type: string
+          enum: [per_unit_metered, fixed_monthly, included_in_rent]
+        water_rate_per_unit: { type: number, example: 100 }
+        water_fixed_fee: { type: number, example: 0 }
+        water_billing_day: { type: string, example: same_as_rent }
+        water_reading_due_days: { type: integer, example: 3 }
+        water_missed_reading_action:
+          type: string
+          enum: [carry_forward, do_not_bill, estimate_average]
+        rent_connection_id:
+          type: string
+          format: uuid
+        water_connection_id:
+          type: string
+          format: uuid
+
+    Property:
+      type: object
+      properties:
+        id: { type: integer }
+        owner_id: { type: integer }
+        name: { type: string }
+        location: { type: string }
+        property_type: { type: string }
+        expected_units: { type: integer }
+        rent_due_day: { type: string }
+        water_billing_method: { type: string }
+        water_rate_per_unit: { type: number }
+        water_fixed_fee: { type: number }
+        sms_sender_id:
+          type: string
+          nullable: true
+        status: { type: string, example: active }
+        rent_account: {}
+        water_account: {}
+
+    PropertyResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data:
+          $ref: "#/components/schemas/Property"
+
+    PropertyListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Property"
+
+    CreateUnitRequest:
+      type: object
+      required:
+        - unit_number
+        - monthly_rent
+        - rent_deposit
+        - water_billing_method
+      properties:
+        unit_number: { type: string, example: A1 }
+        unit_type:
+          type: string
+          enum: [bedsitter, studio, one_bedroom, two_bedroom, three_bedroom, shop, office, other]
+        block_or_floor:
+          type: string
+          nullable: true
+        monthly_rent: { type: number, example: 10000 }
+        rent_deposit: { type: number, example: 10000 }
+        water_billing_method:
+          type: string
+          enum: [fixed_monthly, per_unit_metered, included_in_rent]
+        water_fixed_monthly_bill:
+          type: number
+          nullable: true
+        water_rate_per_unit:
+          type: number
+          nullable: true
+        water_meter_number:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [vacant, reserved, maintenance, inactive]
+
+    UpdateUnitRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateUnitRequest"
+
+    Unit:
+      type: object
+      properties:
+        id: { type: integer }
+        property_id: { type: integer }
+        unit_number: { type: string }
+        unit_type: { type: string }
+        monthly_rent: { type: number }
+        rent_deposit: { type: number }
+        water_deposit: { type: number, example: 2000 }
+        water_billing_method: { type: string }
+        status: { type: string }
+
+    UnitResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: "#/components/schemas/Unit"
+
+    UnitListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Unit"
+
+    CreateTenantRequest:
+      type: object
+      required: [unit_id, full_name, phone, move_in_date]
+      properties:
+        unit_id: { type: integer, example: 1 }
+        full_name: { type: string, example: Daraja Test Tenant }
+        phone:
+          type: string
+          description: Tenant payment phone; used for automatic M-Pesa matching.
+          example: "0708374149"
+        email:
+          type: string
+          format: email
+          nullable: true
+        national_id:
+          type: string
+          nullable: true
+        move_in_date:
+          type: string
+          format: date
+          example: "2026-09-07"
+
+    UpdateTenantRequest:
+      type: object
+      properties:
+        full_name: { type: string }
+        phone: { type: string }
+        email:
+          type: string
+          nullable: true
+        national_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, notice_given]
+        notice_date:
+          type: string
+          format: date
+          nullable: true
+
+    MoveOutRequest:
+      type: object
+      required: [move_out_date]
+      properties:
+        move_out_date:
+          type: string
+          format: date
+        deposit_refund_decision:
+          type: string
+          enum: [full_refund, partial_refund, no_refund]
+        move_out_reason:
+          type: string
+          nullable: true
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: integer }
+        owner_id: { type: integer }
+        property_id: { type: integer }
+        unit_id: { type: integer }
+        unit_number: { type: string }
+        full_name: { type: string }
+        phone: { type: string }
+        payment_phone: { type: string }
+        email:
+          type: string
+          nullable: true
+        monthly_rent: { type: number }
+        rent_deposit_due: { type: number }
+        water_deposit_due: { type: number }
+        status: { type: string }
+
+    TenantResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: "#/components/schemas/Tenant"
+
+    TenantListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tenant"
+
+    MatchPaymentRequest:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id: { type: integer }
+        remember_payment_phone:
+          type: boolean
+          default: false
+
+    ManualPaymentRequest:
+      type: object
+      required: [amount, payment_method]
+      properties:
+        amount: { type: number, example: 10000 }
+        payment_method:
+          type: string
+          enum: [cash, mpesa, bank, other]
+        account_for:
+          type: string
+          enum: [rent, water]
+          default: rent
+        received_at:
+          type: string
+          format: date-time
+        reference:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+
+    SandboxSimulationRequest:
+      type: object
+      required: [payment_account_id, phone, amount]
+      properties:
+        payment_account_id: { type: integer }
+        phone: { type: string, example: "0708374149" }
+        amount: { type: number, example: 10000 }
+        bill_reference: { type: string, example: A1-TENANT }
+
+    Payment:
+      type: object
+      properties:
+        id: { type: integer }
+        property_id: { type: integer }
+        unit_id:
+          type: integer
+          nullable: true
+        tenant_id:
+          type: integer
+          nullable: true
+        amount: { type: number }
+        payment_method: { type: string }
+        payment_source: { type: string }
+        account_for: { type: string }
+        payer_phone: { type: string }
+        reference: { type: string }
+        status: { type: string }
+        match_type:
+          type: string
+          nullable: true
+        applied_to:
+          type: array
+          items:
+            type: object
+
+    PaymentListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payment"
+
+    DarajaC2BCallback:
+      type: object
+      properties:
+        TransactionType: { type: string, example: Pay Bill }
+        TransID: { type: string, example: TEST-PAYMENT-001 }
+        TransTime: { type: string, example: "20260907173512" }
+        TransAmount: { type: string, example: "10000" }
+        BusinessShortCode: { type: string, example: "600990" }
+        BillRefNumber: { type: string, example: A1-TENANT }
+        MSISDN: { type: string, example: "254708374149" }
+        FirstName: { type: string, example: Daraja }
+
+    DarajaAcceptedResponse:
+      type: object
+      properties:
+        ResultCode: { type: integer, example: 0 }
+        ResultDesc: { type: string, example: Accepted }
+
+    WaterRulesRequest:
+      type: object
+      required: [water_billing_method]
+      properties:
+        water_billing_method:
+          type: string
+          enum: [per_unit_metered, fixed_monthly, included_in_rent]
+        water_rate_per_unit: { type: number, example: 100 }
+        water_fixed_fee: { type: number, example: 2000 }
+        water_billing_day: { type: string, example: same_as_rent }
+        water_reading_due_days: { type: integer, example: 3 }
+        water_missed_reading_action:
+          type: string
+          enum: [carry_forward, do_not_bill, estimate_average]
+        apply_to_occupied_units:
+          type: boolean
+          default: false
+
+    WaterReadingRequest:
+      type: object
+      required: [billing_period, current_reading]
+      properties:
+        billing_period:
+          type: string
+          format: date
+        current_reading: { type: number, example: 120 }
+        previous_reading: { type: number, example: 100 }
+        meter_photo_url:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+
+    ReviewWaterReadingRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+        corrected_current_reading:
+          type: number
+        notes:
+          type: string
+          nullable: true
+
+    AgreementTemplateRequest:
+      type: object
+      required: [content]
+      properties:
+        name:
+          type: string
+          example: Standard tenancy agreement
+        content:
+          type: string
+          minLength: 40
+        notice_period_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          default: 30
+
+    CreateExpenseRequest:
+      type: object
+      required: [category, amount, expense_date]
+      properties:
+        category:
+          type: string
+          enum: [repairs_maintenance, security, garbage, cleaning, utilities, other]
+        amount: { type: number, example: 2500 }
+        expense_date:
+          type: string
+          format: date
+        notes:
+          type: string
+          nullable: true
+        receipt_url:
+          type: string
+          format: uri
+          nullable: true
+
+    CreateMaintenanceRequest:
+      type: object
+      required: [title]
+      properties:
+        unit_id:
+          type: integer
+          nullable: true
+        title: { type: string, example: Leaking kitchen tap }
+        description:
+          type: string
+          nullable: true
+        category:
+          type: string
+          enum: [plumbing, electrical, water, structural, security, cleaning, appliance, other]
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+
+    UpdateMaintenanceRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [reported, in_progress, resolved, cancelled]
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+        assigned_caretaker_id:
+          type: integer
+          nullable: true
+        assigned_vendor_name:
+          type: string
+          nullable: true
+        estimated_cost:
+          type: number
+          nullable: true
+        actual_cost:
+          type: number
+          nullable: true
+        resolution_notes:
+          type: string
+          nullable: true
+        cancellation_reason:
+          type: string
+          nullable: true
+
+    AssignCaretakerRequest:
+      type: object
+      required: [phone, first_name, last_name]
+      properties:
+        phone: { type: string, example: "0712345678" }
+        first_name: { type: string, example: Peter }
+        last_name: { type: string, example: Mwangi }
+        permission_level:
+          type: string
+          enum: [level_1, level_2]
+          default: level_1
+
+    UpdateCaretakerRequest:
+      type: object
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        permission_level:
+          type: string
+          enum: [level_1, level_2]
+        status:
+          type: string
+          enum: [active, inactive]
+
+    SmsTemplateRequest:
+      type: object
+      required: [name, body]
+      properties:
+        name:
+          type: string
+          example: Balance reminder
+        body:
+          type: string
+          example: "Dear {name}, your balance for house {house} is KES {balance}."
+
+    SmsRecipientTarget:
+      type: object
+      required: [recipient_group]
+      properties:
+        recipient_group:
+          type: string
+          enum: [all_active_tenants, tenants_with_arrears, tenants_with_credit_balance, property, specific_tenant]
+        property_id:
+          type: integer
+          description: Required only when recipient_group is property.
+        tenant_id:
+          type: integer
+          description: Required only when recipient_group is specific_tenant.
+
+    CreateSmsBroadcastRequest:
+      allOf:
+        - $ref: "#/components/schemas/SmsRecipientTarget"
+        - type: object
+          properties:
+            template_id:
+              type: integer
+            message:
+              type: string
+              description: Required when template_id is omitted.
+            variables:
+              type: object
+              additionalProperties:
+                oneOf:
+                  - type: string
+                  - type: number
+            send_at:
+              type: string
+              format: date-time
+              description: Omit to send now. Must be a future timestamp when supplied.
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        full_name:
+          type: string
+          example: Mary Wanjiru
+        email:
+          type: string
+          format: email
+          nullable: true
+
+    OwnerDefaultsRequest:
+      type: object
+      required: [default_rent_due_day]
+      properties:
+        default_rent_due_day:
+          type: integer
+          minimum: 1
+          maximum: 31
+          example: 5
+
+    NotificationPreferencesRequest:
+      type: object
+      properties:
+        notify_payment_received: { type: boolean }
+        auto_rent_reminder: { type: boolean }
+        remind_water_readings: { type: boolean }
+        alert_suspicious_water: { type: boolean }
+        weekly_collection_summary: { type: boolean }
+        monthly_profit_report: { type: boolean }

@@ -1,0 +1,152 @@
+const { z } = require("zod");
+
+const mpesa_account_schema = z.object({
+  provider_code: z.literal("mpesa"),
+
+  account_type: z.enum(["paybill", "till"]),
+
+  business_number: z.string()
+    .trim()
+    .regex(/^\d{4,15}$/, {
+      message: "Business number must contain 4 to 15 digits.",
+    }),
+
+  display_name: z.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional(),
+
+  account_name: z.string()
+    .trim()
+    .min(1)
+    .max(150)
+    .optional(),
+
+  environment: z.enum(["sandbox", "production"]),
+
+  credentials: z.object({
+    consumer_key: z.string().trim().min(1),
+    consumer_secret: z.string().trim().min(1),
+  }),
+});
+
+const connect_account_schema = z.object({
+  account_for: z.enum(["rent", "water"]),
+  account: mpesa_account_schema,
+});
+
+const create_property_schema = z.object({
+  name: z.string().trim().min(2).max(255),
+
+  location: z.string().trim().min(2).max(255),
+
+  property_type: z.enum([
+    "apartment_block",
+    "bedsitters",
+    "mixed_use",
+    "single_rooms",
+  ]).default("apartment_block"),
+
+  expected_units: z.coerce.number()
+    .int()
+    .min(0)
+    .default(0),
+
+  rent_due_day: z.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .default("5th of every month"),
+
+  sms_sender_id: z.string()
+    .trim()
+    .max(50)
+    .nullable()
+    .optional(),
+
+  water_billing_method: z.enum([
+    "per_unit_metered",
+    "fixed_monthly",
+    "included_in_rent",
+  ]).default("per_unit_metered"),
+
+  water_rate_per_unit: z.coerce.number()
+    .min(0)
+    .default(100),
+
+  water_fixed_fee: z.coerce.number()
+    .min(0)
+    .default(0),
+
+  water_billing_day: z.string()
+    .trim()
+    .max(50)
+    .default("same_as_rent"),
+
+  water_reading_due_days: z.coerce.number()
+    .int()
+    .min(0)
+    .max(31)
+    .default(3),
+
+  water_missed_reading_action: z.string()
+    .trim()
+    .max(50)
+    .default("carry_forward"),
+
+  rent_connection_id: z.string().uuid(),
+
+  water_connection_id: z.string().uuid(),
+}).superRefine((data, context) => {
+  if (
+    data.rent_connection_id ===
+    data.water_connection_id
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["water_connection_id"],
+      message:
+        "Rent and water must use separate payment-account connections.",
+    });
+  }
+
+  if (
+    data.water_billing_method === "fixed_monthly" &&
+    data.water_fixed_fee <= 0
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["water_fixed_fee"],
+      message:
+        "Fixed monthly water fee must be greater than zero.",
+    });
+  }
+});
+
+function validate(schema, data) {
+  const result = schema.safeParse(data);
+
+  if (!result.success) {
+    const error = new Error("Property data is invalid.");
+
+    error.status_code = 422;
+
+    error.details = result.error.issues.map((issue) => ({
+      field: issue.path.join("."),
+      message: issue.message,
+    }));
+
+    throw error;
+  }
+
+  return result.data;
+}
+
+module.exports = {
+  validate_connect_account: (data) =>
+    validate(connect_account_schema, data),
+
+  validate_create_property: (data) =>
+    validate(create_property_schema, data),
+};
