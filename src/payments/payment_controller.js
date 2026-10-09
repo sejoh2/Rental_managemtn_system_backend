@@ -2,6 +2,7 @@ const payment_service = require("./payment_service");
 
 const {
   validate_match_payment,
+  validate_reverse_payment,
   validate_manual_payment,
   validate_sandbox_simulation,
   validate_payment_id,
@@ -103,6 +104,35 @@ async function match_payment(req, res, next) {
   }
 }
 
+async function reverse_payment(req, res, next) {
+  try {
+    const payment_id = validate_payment_id(
+      req.params.payment_id
+    );
+
+    const { reason } = validate_reverse_payment(req.body);
+
+    const payment =
+      await payment_service.reverse_payment(
+        req.user,
+        payment_id,
+        reason,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        payment.status === "unmatched"
+          ? "Payment unassigned. It is back under unmatched payments."
+          : "Payment reversed successfully.",
+      data: payment,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function record_manual_payment(req, res, next) {
   try {
     const tenant_id = validate_tenant_id(
@@ -181,6 +211,7 @@ module.exports = {
   get_payment_stats,
   get_payment,
   match_payment,
+  reverse_payment,
   record_manual_payment,
   list_tenant_payments,
   simulate_sandbox_payment,

@@ -381,6 +381,17 @@ async function init_payment_tables() {
       );
 
     ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS reversed_by BIGINT
+      REFERENCES users(user_id)
+      ON DELETE SET NULL;
+
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS reverse_reason TEXT;
+
+    ALTER TABLE payments
       DROP CONSTRAINT IF EXISTS payments_account_for_check;
 
     ALTER TABLE payments

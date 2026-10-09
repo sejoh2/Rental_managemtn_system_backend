@@ -52,6 +52,11 @@ router.post(
   payment_controller.match_payment
 );
 
+router.post(
+  "/payments/:payment_id/reverse",
+  payment_controller.reverse_payment
+);
+
 router.get(
   "/tenants/:tenant_id/payments",
   payment_controller.list_tenant_payments

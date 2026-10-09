@@ -60,6 +60,11 @@ function public_payment(payment) {
 
     unmatched_reason: payment.unmatched_reason,
 
+    notes: payment.notes || null,
+
+    reversed_at: payment.reversed_at || null,
+    reverse_reason: payment.reverse_reason || null,
+
     applied_to: payment.applied_to || [],
   };
 }
@@ -567,6 +572,160 @@ async function match_unmatched_payment(
   }
 }
 
+/*
+  Undoes a payment that was recorded or assigned wrongly.
+
+  The money is taken back off every charge it paid and any
+  credit it left is removed, so the tenant's balance returns
+  to what it was before.
+
+  - A manually recorded payment is kept on record as reversed.
+  - An M-Pesa payment is real money that did arrive, so it goes
+    back to unmatched and can be assigned to the right tenant.
+*/
+async function reverse_payment(
+  owner,
+  payment_id,
+  reason,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const payment = await get_payment_with_context(
+      client,
+      payment_id,
+      owner.user_id,
+      true
+    );
+
+    if (!payment) {
+      const error = new Error("Payment not found.");
+      error.status_code = 404;
+      throw error;
+    }
+
+    if (payment.status !== "matched") {
+      const error = new Error(
+        "Only a payment that is matched to a tenant can be reversed."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    const allocations_result = await client.query(
+      `
+        SELECT *
+        FROM payment_allocations
+        WHERE payment_id = $1
+        FOR UPDATE
+      `,
+      [payment.id]
+    );
+
+    for (const allocation of allocations_result.rows) {
+      await client.query(
+        `
+          UPDATE tenant_charges
+          SET
+            amount_paid = amount_paid - $1,
+            status = CASE
+              WHEN status = 'void' THEN 'void'
+              WHEN amount_paid - $1 <= 0 THEN 'open'
+              ELSE 'partial'
+            END
+          WHERE id = $2
+        `,
+        [allocation.amount, allocation.tenant_charge_id]
+      );
+    }
+
+    await client.query(
+      `
+        DELETE FROM payment_allocations
+        WHERE payment_id = $1
+      `,
+      [payment.id]
+    );
+
+    await client.query(
+      `
+        DELETE FROM tenant_credits
+        WHERE source_payment_id = $1
+      `,
+      [payment.id]
+    );
+
+    const is_manual = payment.payment_source === "manual";
+
+    if (is_manual) {
+      await client.query(
+        `
+          UPDATE payments
+          SET
+            status = 'reversed',
+            reversed_at = CURRENT_TIMESTAMP,
+            reversed_by = $1,
+            reverse_reason = $2
+          WHERE id = $3
+        `,
+        [owner.user_id, reason, payment.id]
+      );
+    } else {
+      await client.query(
+        `
+          UPDATE payments
+          SET
+            status = 'unmatched',
+            tenant_id = NULL,
+            unit_id = NULL,
+            match_type = NULL,
+            matched_by = NULL,
+            matched_at = NULL,
+            unmatched_reason = $1,
+            reversed_at = CURRENT_TIMESTAMP,
+            reversed_by = $2,
+            reverse_reason = $3
+          WHERE id = $4
+        `,
+        [
+          `Unassigned from ${payment.tenant_name || "the tenant"}: ${reason}`,
+          owner.user_id,
+          reason,
+          payment.id,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: is_manual
+        ? "MANUAL_PAYMENT_REVERSED"
+        : "PAYMENT_UNASSIGNED",
+      entity_type: "payment",
+      entity_id: payment.id,
+      metadata: {
+        tenant_id: payment.tenant_id,
+        amount: payment.amount,
+        reason,
+      },
+      ip_address,
+    });
+
+    return get_payment_by_id(owner, payment.id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function record_manual_payment(
   owner,
   tenant_id,
@@ -748,15 +907,15 @@ async function get_payment_stats(owner) {
       SELECT
         COALESCE(
           SUM(amount) FILTER (
-            WHERE received_at::DATE =
-              CURRENT_DATE
+            WHERE received_today
+              AND status IN ('matched', 'unmatched')
           ),
           0
         ) AS received_today,
 
         COUNT(*) FILTER (
-          WHERE received_at::DATE =
-            CURRENT_DATE
+          WHERE received_today
+            AND status IN ('matched', 'unmatched')
         ) AS received_today_count,
 
         COUNT(*) FILTER (
@@ -771,7 +930,19 @@ async function get_payment_stats(owner) {
         COUNT(*) FILTER (
           WHERE status = 'unmatched'
         ) AS unmatched_count
-      FROM payments
+      FROM (
+        /*
+          "Today" is the owner's day in Kenya, and reversed
+          payments are not money received.
+        */
+        SELECT
+          payments.*,
+          (
+            (received_at AT TIME ZONE 'Africa/Nairobi')::DATE =
+            (CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Nairobi')::DATE
+          ) AS received_today
+        FROM payments
+      ) AS payments
       WHERE owner_id = $1
     `,
     [owner.user_id]
@@ -912,6 +1083,7 @@ module.exports = {
   receive_mpesa_c2b_confirmation,
   match_unmatched_payment,
   record_manual_payment,
+  reverse_payment,
   get_payment_by_id,
   list_payments,
   list_unmatched_payments,

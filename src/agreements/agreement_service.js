@@ -440,7 +440,11 @@ async function delete_property_template(
   }
 }
 
-async function create_agreement_for_new_tenant(
+/*
+  Fills the tenant's effective template (the property's own,
+  or the owner's default) with their current details.
+*/
+async function render_tenant_agreement(
   client,
   tenant_id
 ) {
@@ -478,25 +482,6 @@ async function create_agreement_for_new_tenant(
     throw error;
   }
 
-  const existing_result = await client.query(
-    `
-      SELECT id
-      FROM agreements
-      WHERE tenant_id = $1
-      LIMIT 1
-    `,
-    [tenant.id]
-  );
-
-  if (existing_result.rows[0]) {
-    const error = new Error(
-      "This tenant already has an agreement."
-    );
-
-    error.status_code = 409;
-    throw error;
-  }
-
   const template = await get_effective_template(
     client,
     tenant.owner_id,
@@ -524,6 +509,39 @@ async function create_agreement_for_new_tenant(
     notice_period_days:
       template.notice_period_days,
   });
+
+  return {
+    tenant,
+    template,
+    rendered_content,
+  };
+}
+
+async function create_agreement_for_new_tenant(
+  client,
+  tenant_id
+) {
+  const { tenant, template, rendered_content } =
+    await render_tenant_agreement(client, tenant_id);
+
+  const existing_result = await client.query(
+    `
+      SELECT id
+      FROM agreements
+      WHERE tenant_id = $1
+      LIMIT 1
+    `,
+    [tenant.id]
+  );
+
+  if (existing_result.rows[0]) {
+    const error = new Error(
+      "This tenant already has an agreement."
+    );
+
+    error.status_code = 409;
+    throw error;
+  }
 
   const agreement_result = await client.query(
     `
@@ -619,6 +637,104 @@ async function generate_agreement_for_existing_tenant(
     });
 
     return agreement;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/*
+  Rewrites an unsigned agreement from the current template and
+  the tenant's current details. A signed agreement is a record
+  of what was agreed, so it can no longer be changed.
+*/
+async function regenerate_agreement(
+  owner,
+  agreement_id,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const agreement_result = await client.query(
+      `
+        SELECT *
+        FROM agreements
+        WHERE id = $1
+          AND owner_id = $2
+        FOR UPDATE
+      `,
+      [agreement_id, owner.user_id]
+    );
+
+    const agreement = agreement_result.rows[0];
+
+    if (!agreement) {
+      const error = new Error(
+        "Agreement not found or you do not have access to it."
+      );
+
+      error.status_code = 404;
+      throw error;
+    }
+
+    if (agreement.status === "signed") {
+      const error = new Error(
+        "A signed agreement cannot be regenerated."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    const { template, rendered_content } =
+      await render_tenant_agreement(
+        client,
+        agreement.tenant_id
+      );
+
+    await client.query(
+      `
+        UPDATE agreements
+        SET
+          template_id = $1,
+          template_name = $2,
+          template_version = $3,
+          template_content = $4,
+          rendered_content = $5,
+          generated_at = CURRENT_TIMESTAMP
+        WHERE id = $6
+      `,
+      [
+        template.id,
+        template.name,
+        template.version,
+        template.content,
+        rendered_content,
+        agreement.id,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "TENANT_AGREEMENT_REGENERATED",
+      entity_type: "agreement",
+      entity_id: agreement.id,
+      metadata: {
+        tenant_id: agreement.tenant_id,
+        template_id: template.id,
+        template_version: template.version,
+      },
+      ip_address,
+    });
+
+    return get_agreement_by_id(owner, agreement.id);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -792,9 +908,61 @@ async function mark_agreement_signed(
   return get_agreement_by_id(owner, agreement.id);
 }
 
+/*
+  Reverses a mistaken "signed" mark. The agreement goes back
+  to awaiting signature and can be regenerated again.
+*/
+async function unmark_agreement_signed(
+  owner,
+  agreement_id,
+  ip_address
+) {
+  const existing = await get_agreement_by_id(
+    owner,
+    agreement_id
+  );
+
+  if (existing.status !== "signed") {
+    const error = new Error(
+      "This agreement is not marked as signed."
+    );
+
+    error.status_code = 400;
+    throw error;
+  }
+
+  await db.query(
+    `
+      UPDATE agreements
+      SET
+        status = 'awaiting_signature',
+        signed_at = NULL,
+        signed_notes = NULL
+      WHERE id = $1
+        AND owner_id = $2
+    `,
+    [agreement_id, owner.user_id]
+  );
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "TENANT_AGREEMENT_SIGNED_MARK_REMOVED",
+    entity_type: "agreement",
+    entity_id: agreement_id,
+    metadata: {
+      tenant_id: existing.tenant_id,
+      previous_signed_at: existing.signed_at,
+    },
+    ip_address,
+  });
+
+  return get_agreement_by_id(owner, agreement_id);
+}
+
 module.exports = {
   create_agreement_for_new_tenant,
   generate_agreement_for_existing_tenant,
+  regenerate_agreement,
 
   get_default_template_for_owner,
   get_templates_for_property,
@@ -805,4 +973,5 @@ module.exports = {
   get_agreement_by_id,
   get_tenant_agreement,
   mark_agreement_signed,
+  unmark_agreement_signed,
 };

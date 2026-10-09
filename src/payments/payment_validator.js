@@ -47,6 +47,13 @@ const manual_payment_schema = z.object({
     .optional(),
 });
 
+const reverse_payment_schema = z.object({
+  reason: z.string()
+    .trim()
+    .min(2)
+    .max(5000),
+});
+
 const sandbox_simulation_schema = z.object({
   payment_account_id: z.coerce.number()
     .int()
@@ -102,6 +109,9 @@ function validate_id(value, label) {
 module.exports = {
   validate_match_payment: (data) =>
     validate(match_payment_schema, data),
+
+  validate_reverse_payment: (data) =>
+    validate(reverse_payment_schema, data),
 
   validate_manual_payment: (data) =>
     validate(manual_payment_schema, data),

@@ -786,6 +786,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/payments/{payment_id}/reverse:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Reverse or unassign a matched payment
+      description: |
+        Takes the money back off every charge the payment settled and removes any
+        credit it left. A manually recorded payment stays on record as `reversed`.
+        An M-Pesa payment returns to `unmatched` so it can be assigned again.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 2
+      responses:
+        "200":
+          description: Payment reversed or unassigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/tenants/{tenant_id}/payments:
     get:
       tags: [Step 6 - Payments]
@@ -1137,6 +1168,42 @@ paths:
       responses:
         "200":
           description: Agreement signed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreements/{agreement_id}/unsign:
+    patch:
+      tags: [Step 8 - Agreements]
+      summary: Remove a mistaken signed mark
+      description: The agreement returns to awaiting signature and can be regenerated again.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AgreementId"
+      responses:
+        "200":
+          description: Agreement is awaiting signature again
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/agreements/{agreement_id}/regenerate:
+    post:
+      tags: [Step 8 - Agreements]
+      summary: Regenerate an unsigned agreement
+      description: |
+        Rewrites the agreement from the current template and the tenant's current
+        details. Signed agreements cannot be regenerated.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AgreementId"
+      responses:
+        "200":
+          description: Agreement regenerated
           content:
             application/json:
               schema:

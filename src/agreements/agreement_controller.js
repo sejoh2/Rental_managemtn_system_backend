@@ -263,6 +263,53 @@ async function mark_agreement_signed(
   }
 }
 
+async function unmark_agreement_signed(req, res, next) {
+  try {
+    const agreement_id = validate_agreement_id(
+      req.params.agreement_id
+    );
+
+    const agreement =
+      await agreement_service.unmark_agreement_signed(
+        req.user,
+        agreement_id,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Agreement is awaiting signature again.",
+      data: agreement,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function regenerate_agreement(req, res, next) {
+  try {
+    const agreement_id = validate_agreement_id(
+      req.params.agreement_id
+    );
+
+    const agreement =
+      await agreement_service.regenerate_agreement(
+        req.user,
+        agreement_id,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Agreement regenerated successfully.",
+      data: agreement,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function download_agreement_pdf(
   req,
   res,
@@ -322,6 +369,8 @@ module.exports = {
   generate_tenant_agreement,
 
   mark_agreement_signed,
+  unmark_agreement_signed,
+  regenerate_agreement,
 
   download_agreement_pdf,
   download_tenant_agreement_pdf,

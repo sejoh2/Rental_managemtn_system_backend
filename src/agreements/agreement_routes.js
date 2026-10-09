@@ -66,6 +66,16 @@ router.patch(
   agreement_controller.mark_agreement_signed
 );
 
+router.patch(
+  "/agreements/:agreement_id/unsign",
+  agreement_controller.unmark_agreement_signed
+);
+
+router.post(
+  "/agreements/:agreement_id/regenerate",
+  agreement_controller.regenerate_agreement
+);
+
 router.get(
   "/agreements/:agreement_id/download",
   agreement_controller.download_agreement_pdf
