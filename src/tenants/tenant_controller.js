@@ -4,6 +4,7 @@ const {
   validate_create_tenant,
   validate_update_tenant,
   validate_move_out,
+  validate_list_tenants,
   validate_property_id,
   validate_tenant_id,
 } = require("./tenant_validator");
@@ -48,6 +49,25 @@ async function list_property_tenants(req, res, next) {
 
     return res.status(200).json({
       success: true,
+      data: tenants,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function list_tenants(req, res, next) {
+  try {
+    const filters = validate_list_tenants(req.query);
+
+    const tenants = await tenant_service.list_tenants(
+      req.user,
+      filters
+    );
+
+    return res.status(200).json({
+      success: true,
+      total: tenants.length,
       data: tenants,
     });
   } catch (error) {
@@ -130,6 +150,7 @@ async function move_out_tenant(req, res, next) {
 module.exports = {
   create_tenant,
   list_property_tenants,
+  list_tenants,
   get_tenant,
   update_tenant,
   move_out_tenant,

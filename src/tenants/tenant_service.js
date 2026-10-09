@@ -12,6 +12,11 @@ const {
   create_agreement_for_new_tenant,
 } = require("../agreements/agreement_service");
 
+const {
+  create_move_in_charges,
+  adjust_move_out_charges,
+} = require("../billing/billing_service");
+
 function public_tenant(tenant) {
   return {
     id: Number(tenant.id),
@@ -21,6 +26,7 @@ function public_tenant(tenant) {
     unit_id: Number(tenant.unit_id),
 
     unit_number: tenant.unit_number || null,
+    property_name: tenant.property_name || null,
 
     full_name: tenant.full_name,
 
@@ -59,10 +65,80 @@ function public_tenant(tenant) {
     deposit_refund_decision:
       tenant.deposit_refund_decision,
 
+    /*
+      What the tenant owes now and any overpayment held as
+      credit. Present on list and profile responses only.
+    */
+    balance:
+      tenant.balance == null
+        ? undefined
+        : Number(tenant.balance),
+
+    credit_balance:
+      tenant.credit_balance == null
+        ? undefined
+        : Number(tenant.credit_balance),
+
     created_at: tenant.created_at,
     updated_at: tenant.updated_at,
   };
 }
+
+const tenant_overview_select = `
+  SELECT
+    tenants.*,
+    units.unit_number,
+    properties.name AS property_name,
+    financials.balance,
+    financials.credit_balance
+  FROM tenants
+  INNER JOIN units
+    ON units.id = tenants.unit_id
+  INNER JOIN properties
+    ON properties.id = tenants.property_id
+  CROSS JOIN LATERAL (
+    SELECT
+      COALESCE(
+        (
+          SELECT SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          )
+          FROM tenant_charges
+          WHERE tenant_charges.tenant_id = tenants.id
+            AND tenant_charges.status IN (
+              'open',
+              'partial'
+            )
+        ),
+        0
+      ) AS balance,
+
+      COALESCE(
+        (
+          SELECT SUM(
+            tenant_credits.remaining_amount
+          )
+          FROM tenant_credits
+          WHERE tenant_credits.tenant_id = tenants.id
+            AND tenant_credits.remaining_amount > 0
+        ),
+        0
+      ) AS credit_balance
+  ) AS financials
+`;
+
+const tenant_overview_order = `
+  ORDER BY
+    CASE
+      WHEN tenants.status = 'active' THEN 0
+      WHEN tenants.status = 'notice_given' THEN 1
+      ELSE 2
+    END,
+    properties.name ASC,
+    units.unit_number ASC,
+    tenants.created_at DESC
+`;
 
 function normalize_payment_phone(phone) {
   const normalized = normalize_phone(phone);
@@ -280,6 +356,13 @@ async function create_tenant(
     const tenant = tenant_result.rows[0];
 
     /*
+      Deposits are created by a database trigger. The first
+      month's rent, electricity, and fixed water follow the
+      property's move-in billing rule.
+    */
+    await create_move_in_charges(client, tenant.id);
+
+    /*
       Occupancy changes immediately.
       Deposit payment is not required for occupancy.
     */
@@ -381,21 +464,10 @@ async function list_property_tenants(owner, property_id) {
 
   const result = await db.query(
     `
-      SELECT
-        tenants.*,
-        units.unit_number
-      FROM tenants
-      INNER JOIN units
-        ON units.id = tenants.unit_id
+      ${tenant_overview_select}
       WHERE tenants.owner_id = $1
         AND tenants.property_id = $2
-      ORDER BY
-        CASE
-          WHEN tenants.status = 'active' THEN 0
-          WHEN tenants.status = 'notice_given' THEN 1
-          ELSE 2
-        END,
-        tenants.created_at DESC
+      ${tenant_overview_order}
     `,
     [owner.user_id, property_id]
   );
@@ -403,13 +475,56 @@ async function list_property_tenants(owner, property_id) {
   return result.rows.map(public_tenant);
 }
 
-async function get_tenant_by_id(owner, tenant_id) {
-  const tenant = await get_tenant_row_for_owner(
-    owner.user_id,
-    tenant_id
+/*
+  Every tenant of the owner, across all properties, with
+  what each one owes. Archived properties are left out.
+*/
+async function list_tenants(owner, filters) {
+  const result = await db.query(
+    `
+      ${tenant_overview_select}
+      WHERE tenants.owner_id = $1
+        AND properties.status != 'archived'
+        AND (
+          $2::BIGINT IS NULL
+          OR tenants.property_id = $2
+        )
+        AND (
+          $3::VARCHAR IS NULL
+          OR tenants.status = $3
+        )
+      ${tenant_overview_order}
+    `,
+    [
+      owner.user_id,
+      filters.property_id || null,
+      filters.status || null,
+    ]
   );
 
-  return public_tenant(tenant);
+  return result.rows.map(public_tenant);
+}
+
+async function get_tenant_by_id(owner, tenant_id) {
+  const result = await db.query(
+    `
+      ${tenant_overview_select}
+      WHERE tenants.id = $1
+        AND tenants.owner_id = $2
+    `,
+    [tenant_id, owner.user_id]
+  );
+
+  if (!result.rows[0]) {
+    const error = new Error(
+      "Tenant not found or you do not have access to them."
+    );
+
+    error.status_code = 404;
+    throw error;
+  }
+
+  return public_tenant(result.rows[0]);
 }
 
 async function update_tenant(
@@ -579,6 +694,17 @@ async function move_out_tenant(
       [tenant.unit_id]
     );
 
+    /*
+      Settles the final month according to the property's
+      move-out billing rule and voids any later charges.
+    */
+    const charge_adjustments =
+      await adjust_move_out_charges(
+        client,
+        tenant_id,
+        data.move_out_date
+      );
+
     await client.query("COMMIT");
 
     const updated_tenant =
@@ -596,6 +722,7 @@ async function move_out_tenant(
         move_out_date: data.move_out_date,
         deposit_refund_decision:
           data.deposit_refund_decision || null,
+        charge_adjustments,
       },
       ip_address,
     });
@@ -615,6 +742,7 @@ async function move_out_tenant(
 module.exports = {
   create_tenant,
   list_property_tenants,
+  list_tenants,
   get_tenant_by_id,
   update_tenant,
   move_out_tenant,

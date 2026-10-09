@@ -22,7 +22,7 @@ const defaults_schema = z.object({
   default_rent_due_day: z.coerce.number()
     .int()
     .min(1)
-    .max(31),
+    .max(28),
 });
 
 const notifications_schema = z.object({

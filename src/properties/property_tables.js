@@ -34,8 +34,34 @@ async function init_property_tables() {
       expected_units INTEGER NOT NULL DEFAULT 0
         CHECK (expected_units >= 0),
 
-      rent_due_day VARCHAR(100) NOT NULL
-        DEFAULT '5th of every month',
+      /*
+        Day of the month, 1 to 28, so it exists in every month.
+      */
+      rent_due_day INTEGER NOT NULL DEFAULT 5
+        CHECK (rent_due_day BETWEEN 1 AND 28),
+
+      /*
+        How the first and last month of a tenancy are billed
+        when the tenant moves in or out part-way through.
+      */
+      move_in_billing VARCHAR(30) NOT NULL
+        DEFAULT 'prorated'
+        CHECK (
+          move_in_billing IN (
+            'prorated',
+            'full_month',
+            'free_until_next_month'
+          )
+        ),
+
+      move_out_billing VARCHAR(30) NOT NULL
+        DEFAULT 'prorated'
+        CHECK (
+          move_out_billing IN (
+            'prorated',
+            'full_month'
+          )
+        ),
 
       water_billing_method VARCHAR(50) NOT NULL
         DEFAULT 'per_unit_metered'
@@ -88,7 +114,7 @@ async function init_property_tables() {
         ON DELETE CASCADE,
 
       account_for VARCHAR(30) NOT NULL
-        CHECK (account_for IN ('rent', 'water')),
+        CHECK (account_for IN ('rent', 'water', 'electricity')),
 
       provider_code VARCHAR(30) NOT NULL
         CHECK (provider_code = 'mpesa'),
@@ -172,7 +198,7 @@ async function init_property_tables() {
         ON DELETE CASCADE,
 
       account_for VARCHAR(30) NOT NULL
-        CHECK (account_for IN ('rent', 'water')),
+        CHECK (account_for IN ('rent', 'water', 'electricity')),
 
       provider_code VARCHAR(30) NOT NULL
         CHECK (provider_code = 'mpesa'),
@@ -253,6 +279,100 @@ async function init_property_tables() {
       BEFORE UPDATE ON provider_credentials
       FOR EACH ROW
       EXECUTE FUNCTION update_updated_at_column();
+  `);
+
+  /*
+    Upgrades for databases created before monthly billing,
+    numeric rent due days, and electricity accounts existed.
+    Every statement is safe to run again.
+  */
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'properties'
+          AND column_name = 'rent_due_day'
+          AND data_type <> 'integer'
+      ) THEN
+        ALTER TABLE properties
+          ALTER COLUMN rent_due_day DROP DEFAULT;
+
+        ALTER TABLE properties
+          ALTER COLUMN rent_due_day TYPE INTEGER
+          USING LEAST(
+            GREATEST(
+              COALESCE(
+                SUBSTRING(
+                  rent_due_day FROM '[0-9]{1,2}'
+                )::INTEGER,
+                5
+              ),
+              1
+            ),
+            28
+          );
+
+        ALTER TABLE properties
+          ALTER COLUMN rent_due_day SET DEFAULT 5;
+      END IF;
+    END
+    $$;
+
+    ALTER TABLE properties
+      DROP CONSTRAINT IF EXISTS properties_rent_due_day_check;
+
+    ALTER TABLE properties
+      ADD CONSTRAINT properties_rent_due_day_check
+      CHECK (rent_due_day BETWEEN 1 AND 28);
+
+    ALTER TABLE properties
+      ADD COLUMN IF NOT EXISTS move_in_billing VARCHAR(30)
+      NOT NULL DEFAULT 'prorated';
+
+    ALTER TABLE properties
+      DROP CONSTRAINT IF EXISTS properties_move_in_billing_check;
+
+    ALTER TABLE properties
+      ADD CONSTRAINT properties_move_in_billing_check
+      CHECK (
+        move_in_billing IN (
+          'prorated',
+          'full_month',
+          'free_until_next_month'
+        )
+      );
+
+    ALTER TABLE properties
+      ADD COLUMN IF NOT EXISTS move_out_billing VARCHAR(30)
+      NOT NULL DEFAULT 'prorated';
+
+    ALTER TABLE properties
+      DROP CONSTRAINT IF EXISTS properties_move_out_billing_check;
+
+    ALTER TABLE properties
+      ADD CONSTRAINT properties_move_out_billing_check
+      CHECK (
+        move_out_billing IN (
+          'prorated',
+          'full_month'
+        )
+      );
+
+    ALTER TABLE payment_accounts
+      DROP CONSTRAINT IF EXISTS payment_accounts_account_for_check;
+
+    ALTER TABLE payment_accounts
+      ADD CONSTRAINT payment_accounts_account_for_check
+      CHECK (account_for IN ('rent', 'water', 'electricity'));
+
+    ALTER TABLE property_connection_checks
+      DROP CONSTRAINT IF EXISTS property_connection_checks_account_for_check;
+
+    ALTER TABLE property_connection_checks
+      ADD CONSTRAINT property_connection_checks_account_for_check
+      CHECK (account_for IN ('rent', 'water', 'electricity'));
   `);
 
   console.log("[PROPERTIES] Tables initialized.");

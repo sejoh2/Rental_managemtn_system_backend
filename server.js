@@ -44,6 +44,9 @@ const {
 const {
   init_settings_tables,
 } = require("./src/settings/settings_tables");
+const {
+  start_billing_scheduler,
+} = require("./src/billing/billing_service");
 
 
 function require_environment_variable(name) {
@@ -109,6 +112,10 @@ async function start_server() {
     console.log("[SETTINGS] Settings tables are ready.");
     
     start_sms_scheduler();
+
+    start_billing_scheduler();
+
+    console.log("[BILLING] Monthly billing scheduler started.");
 
     console.log("[TENANTS] Tables are ready.");
 

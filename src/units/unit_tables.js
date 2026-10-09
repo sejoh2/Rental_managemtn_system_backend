@@ -107,6 +107,28 @@ async function init_unit_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    Optional fixed electricity amount billed with rent each month.
+    NULL or 0 means electricity is not billed for the unit.
+  */
+  await db.query(`
+    ALTER TABLE units
+      ADD COLUMN IF NOT EXISTS electricity_monthly_charge
+      NUMERIC(12,2)
+      CHECK (
+        electricity_monthly_charge IS NULL
+        OR electricity_monthly_charge >= 0
+      );
+
+    ALTER TABLE units
+      ADD COLUMN IF NOT EXISTS electricity_deposit
+      NUMERIC(12,2)
+      CHECK (
+        electricity_deposit IS NULL
+        OR electricity_deposit >= 0
+      );
+  `);
+
   console.log("[UNITS] Units table initialized.");
 }
 

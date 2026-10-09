@@ -27,7 +27,9 @@ async function init_payment_tables() {
             'rent_deposit',
             'water_deposit',
             'rent',
-            'water'
+            'water',
+            'electricity',
+            'electricity_deposit'
           )
         ),
 
@@ -85,7 +87,7 @@ async function init_payment_tables() {
 
       account_for VARCHAR(30)
         CHECK (
-          account_for IN ('rent', 'water')
+          account_for IN ('rent', 'water', 'electricity')
         ),
 
       amount NUMERIC(12,2) NOT NULL
@@ -247,8 +249,11 @@ async function init_payment_tables() {
       EXECUTE FUNCTION update_updated_at_column();
 
     /*
-      Every new tenant automatically receives their initial charges.
+      Every new tenant automatically receives their deposit charges.
       No payment is required for the unit to become occupied.
+
+      The first month's rent is created by the billing service,
+      because it depends on the property's move-in billing rule.
     */
     CREATE OR REPLACE FUNCTION create_initial_tenant_charges()
     RETURNS TRIGGER AS
@@ -284,16 +289,6 @@ async function init_payment_tables() {
           DATE '1970-01-01',
           NEW.move_in_date,
           NEW.water_deposit_due
-        ),
-        (
-          NEW.id,
-          NEW.owner_id,
-          NEW.property_id,
-          NEW.unit_id,
-          'rent',
-          DATE_TRUNC('month', NEW.move_in_date)::DATE,
-          NEW.move_in_date,
-          NEW.monthly_rent
         )
       ON CONFLICT (tenant_id, charge_type, billing_period)
       DO NOTHING;
@@ -362,29 +357,35 @@ async function init_payment_tables() {
     FROM tenants
     ON CONFLICT (tenant_id, charge_type, billing_period)
     DO NOTHING;
+  `);
 
-    INSERT INTO tenant_charges (
-      tenant_id,
-      owner_id,
-      property_id,
-      unit_id,
-      charge_type,
-      billing_period,
-      due_date,
-      amount_due
-    )
-    SELECT
-      id,
-      owner_id,
-      property_id,
-      unit_id,
-      'rent',
-      DATE_TRUNC('month', move_in_date)::DATE,
-      move_in_date,
-      monthly_rent
-    FROM tenants
-    ON CONFLICT (tenant_id, charge_type, billing_period)
-    DO NOTHING;
+  /*
+    Upgrades for databases created before electricity billing.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE tenant_charges
+      DROP CONSTRAINT IF EXISTS tenant_charges_charge_type_check;
+
+    ALTER TABLE tenant_charges
+      ADD CONSTRAINT tenant_charges_charge_type_check
+      CHECK (
+        charge_type IN (
+          'rent_deposit',
+          'water_deposit',
+          'rent',
+          'water',
+          'electricity',
+          'electricity_deposit'
+        )
+      );
+
+    ALTER TABLE payments
+      DROP CONSTRAINT IF EXISTS payments_account_for_check;
+
+    ALTER TABLE payments
+      ADD CONSTRAINT payments_account_for_check
+      CHECK (account_for IN ('rent', 'water', 'electricity'));
   `);
 
   console.log("[PAYMENTS] Payment tables initialized.");

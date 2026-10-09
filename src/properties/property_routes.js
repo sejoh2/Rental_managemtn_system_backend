@@ -42,6 +42,11 @@ router.put(
   property_controller.replace_payment_account
 );
 
+router.delete(
+  "/:property_id/payment-accounts/:account_for",
+  property_controller.remove_payment_account
+);
+
 router.post(
   "/:property_id/payment-accounts/:payment_account_id/register-c2b-urls",
   property_controller.reregister_payment_account_c2b_urls

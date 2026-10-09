@@ -112,11 +112,7 @@ function calculate_due_date(property, billing_period) {
   let day = 1;
 
   if (property.water_billing_day === "same_as_rent") {
-    const match = String(
-      property.rent_due_day || ""
-    ).match(/\d{1,2}/);
-
-    day = match ? Number(match[0]) : 1;
+    day = Number(property.rent_due_day) || 1;
   } else if (
     property.water_billing_day ===
     "last_day_of_month"

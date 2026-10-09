@@ -1,3 +1,7 @@
+const {
+  ordinal_day,
+} = require("../utils/ordinal");
+
 const default_template_content = `TENANCY AGREEMENT
 
 Landlord: {landlord_name}
@@ -101,7 +105,11 @@ function render_agreement_template({
     deposit_amount: format_currency(
       tenant.rent_deposit_due
     ),
-    rent_due_day: property.rent_due_day,
+    /*
+      The stored day is a number; templates read
+      "Rent due: {rent_due_day} of every month".
+    */
+    rent_due_day: ordinal_day(property.rent_due_day),
     notice_period: String(notice_period_days),
     move_in_date: format_date(tenant.move_in_date),
   };

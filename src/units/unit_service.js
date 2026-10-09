@@ -37,11 +37,112 @@ function public_unit(unit) {
 
     water_meter_number: unit.water_meter_number,
 
+    /*
+      Optional fixed amount billed with rent each month.
+      null means electricity is not billed for this unit.
+    */
+    electricity_monthly_charge:
+      Number(unit.electricity_monthly_charge) > 0
+        ? Number(unit.electricity_monthly_charge)
+        : null,
+
+    /*
+      Optional one-off deposit charged in full at move-in.
+    */
+    electricity_deposit:
+      Number(unit.electricity_deposit) > 0
+        ? Number(unit.electricity_deposit)
+        : null,
+
     status: unit.status,
+
+    /*
+      The active tenant and what they currently owe, so the
+      Units page can show occupancy and arrears per house.
+    */
+    current_tenant: unit.current_tenant_id
+      ? {
+        tenant_id: Number(unit.current_tenant_id),
+        full_name: unit.current_tenant_name,
+        status: unit.current_tenant_status,
+        balance: Number(unit.current_tenant_balance),
+      }
+      : null,
 
     created_at: unit.created_at,
     updated_at: unit.updated_at,
   };
+}
+
+const unit_overview_select = `
+  SELECT
+    units.*,
+    current_tenant.tenant_id AS current_tenant_id,
+    current_tenant.full_name AS current_tenant_name,
+    current_tenant.status AS current_tenant_status,
+    current_tenant.balance AS current_tenant_balance
+  FROM units
+  LEFT JOIN LATERAL (
+    SELECT
+      tenants.id AS tenant_id,
+      tenants.full_name,
+      tenants.status,
+      COALESCE(
+        (
+          SELECT SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          )
+          FROM tenant_charges
+          WHERE tenant_charges.tenant_id = tenants.id
+            AND tenant_charges.status IN (
+              'open',
+              'partial'
+            )
+        ),
+        0
+      ) AS balance
+    FROM tenants
+    WHERE tenants.unit_id = units.id
+      AND tenants.status IN (
+        'active',
+        'notice_given'
+      )
+    ORDER BY tenants.created_at DESC
+    LIMIT 1
+  ) AS current_tenant ON TRUE
+`;
+
+async function load_public_unit(unit_id) {
+  const result = await db.query(
+    `
+      ${unit_overview_select}
+      WHERE units.id = $1
+    `,
+    [unit_id]
+  );
+
+  return public_unit(result.rows[0]);
+}
+
+/*
+  Archived units keep their number, so the message covers
+  both active and archived units.
+*/
+function throw_unit_number_conflict(error) {
+  if (
+    error.code === "23505" &&
+    error.constraint === "units_property_id_unit_number_key"
+  ) {
+    const friendly_error = new Error(
+      "This property already has a unit with that number, either active or archived."
+    );
+
+    friendly_error.status_code = 409;
+    throw friendly_error;
+  }
+
+  throw error;
 }
 
 async function ensure_owner_owns_property(
@@ -170,10 +271,12 @@ async function create_unit(
         water_fixed_monthly_bill,
         water_rate_per_unit,
         water_meter_number,
-        status
+        status,
+        electricity_monthly_charge,
+        electricity_deposit
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,2000,$7,$8,$9,$10,$11
+        $1,$2,$3,$4,$5,$6,2000,$7,$8,$9,$10,$11,$12,$13
       )
       RETURNING *
     `,
@@ -199,8 +302,11 @@ async function create_unit(
         : null,
 
       data.status,
+
+      data.electricity_monthly_charge || null,
+      data.electricity_deposit || null,
     ]
-  );
+  ).catch(throw_unit_number_conflict);
 
   const unit = result.rows[0];
 
@@ -221,7 +327,7 @@ async function create_unit(
     ip_address,
   });
 
-  return public_unit(unit);
+  return load_public_unit(unit.id);
 }
 
 async function list_property_units(owner, property_id) {
@@ -232,13 +338,12 @@ async function list_property_units(owner, property_id) {
 
   const result = await db.query(
     `
-      SELECT *
-      FROM units
-      WHERE property_id = $1
-        AND status != 'inactive'
+      ${unit_overview_select}
+      WHERE units.property_id = $1
+        AND units.status != 'inactive'
       ORDER BY
-        block_or_floor NULLS LAST,
-        unit_number ASC
+        units.block_or_floor NULLS LAST,
+        units.unit_number ASC
     `,
     [property_id]
   );
@@ -259,7 +364,7 @@ async function get_unit_by_id(owner, unit_id) {
     throw error;
   }
 
-  return public_unit(unit);
+  return load_public_unit(unit.id);
 }
 
 async function update_unit(
@@ -299,10 +404,34 @@ async function update_unit(
     throw error;
   }
 
+  /*
+    A tenant still lives in an occupied unit, so its status
+    can only change through the tenant move-out flow.
+  */
+  if (
+    existing.status === "occupied" &&
+    data.status !== undefined &&
+    data.status !== "occupied"
+  ) {
+    const error = new Error(
+      "This unit is occupied. Move the tenant out before changing its status."
+    );
+
+    error.status_code = 400;
+    throw error;
+  }
+
   validate_final_water_configuration(merged_unit);
 
+  /*
+    A rent change on an occupied unit is copied to the tenant
+    living there in the same statement, so the two can never
+    disagree. Charges that were already billed are not changed;
+    the new rent applies to rent billed from now on.
+  */
   const result = await db.query(
     `
+      WITH updated_unit AS (
       UPDATE units
       SET
         unit_number = COALESCE($1, unit_number),
@@ -318,9 +447,43 @@ async function update_unit(
         water_rate_per_unit = $8,
         water_meter_number = $9,
 
-        status = COALESCE($10, status)
+        status = COALESCE($10, status),
+
+        electricity_monthly_charge = CASE
+          WHEN $12::BOOLEAN THEN $13::NUMERIC
+          ELSE electricity_monthly_charge
+        END,
+
+        electricity_deposit = CASE
+          WHEN $14::BOOLEAN THEN $15::NUMERIC
+          ELSE electricity_deposit
+        END
       WHERE id = $11
       RETURNING *
+      ),
+
+      synced_tenant AS (
+        UPDATE tenants
+        SET monthly_rent = updated_unit.monthly_rent
+        FROM updated_unit
+        WHERE tenants.unit_id = updated_unit.id
+          AND tenants.status IN (
+            'active',
+            'notice_given'
+          )
+          AND tenants.monthly_rent <>
+            updated_unit.monthly_rent
+        RETURNING tenants.id
+      )
+
+      SELECT
+        updated_unit.*,
+        (
+          SELECT id
+          FROM synced_tenant
+          LIMIT 1
+        ) AS rent_synced_tenant_id
+      FROM updated_unit
     `,
     [
       data.unit_number ?? null,
@@ -353,8 +516,22 @@ async function update_unit(
       data.status ?? null,
 
       unit_id,
+
+      Object.prototype.hasOwnProperty.call(
+        data,
+        "electricity_monthly_charge"
+      ),
+
+      data.electricity_monthly_charge || null,
+
+      Object.prototype.hasOwnProperty.call(
+        data,
+        "electricity_deposit"
+      ),
+
+      data.electricity_deposit || null,
     ]
-  );
+  ).catch(throw_unit_number_conflict);
 
   const unit = result.rows[0];
 
@@ -367,7 +544,25 @@ async function update_unit(
     ip_address,
   });
 
-  return public_unit(unit);
+  if (unit.rent_synced_tenant_id) {
+    await log_audit({
+      user_id: owner.user_id,
+      action: "TENANT_RENT_CHANGED",
+      entity_type: "tenant",
+      entity_id: unit.rent_synced_tenant_id,
+      metadata: {
+        unit_id: unit.id,
+        unit_number: unit.unit_number,
+        previous_monthly_rent: Number(
+          existing.monthly_rent
+        ),
+        monthly_rent: Number(unit.monthly_rent),
+      },
+      ip_address,
+    });
+  }
+
+  return load_public_unit(unit.id);
 }
 
 async function archive_unit(

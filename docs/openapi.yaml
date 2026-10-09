@@ -325,8 +325,9 @@ paths:
       tags: [Step 3 - Properties and M-Pesa]
       summary: Create property with Rent and Water M-Pesa accounts
       description: |
-        Owner only. Both M-Pesa connections must have been validated first.
-        Use two different `rent_connection_id` and `water_connection_id` values.
+        Owner only. The rent M-Pesa connection must have been validated first.
+        Water and electricity connections are optional; each account needs its
+        own connection and its own business number.
       security:
         - bearerAuth: []
       requestBody:
@@ -418,7 +419,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [rent, water]
+            enum: [rent, water, electricity]
       requestBody:
         required: true
         content:
@@ -433,6 +434,30 @@ paths:
       responses:
         "200":
           description: Payment account changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+    delete:
+      tags: [Step 3 - Properties and M-Pesa]
+      summary: Remove a property's water or electricity M-Pesa account
+      description: |
+        Owner only. The rent account cannot be removed. Afterwards those charges
+        are paid through the rent account. Earlier payments stay on record.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - name: account_for
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [water, electricity]
+      responses:
+        "200":
+          description: Payment account removed
           content:
             application/json:
               schema:
@@ -514,7 +539,11 @@ paths:
     patch:
       tags: [Step 4 - Units]
       summary: Update unit
-      description: Unit cannot be manually set to `occupied`; tenant move-in controls occupancy.
+      description: |
+        Unit cannot be manually set to `occupied`; tenant move-in controls occupancy.
+        The status of an occupied unit cannot be changed until the tenant moves out.
+        Changing `monthly_rent` on an occupied unit also updates the current tenant's
+        monthly rent; charges already billed are not changed.
       security:
         - bearerAuth: []
       parameters:
@@ -568,8 +597,10 @@ paths:
       tags: [Step 5 - Tenants]
       summary: Add tenant to a unit
       description: |
-        Unit becomes occupied immediately. Rent, rent deposit, and fixed KES 2,000
-        water deposit are copied from the unit and become initial tenant charges.
+        Unit becomes occupied immediately. The rent deposit and fixed KES 2,000 water
+        deposit are charged in full. The move-in month's rent, electricity, and fixed
+        water follow the property's `move_in_billing` rule. From the next month on,
+        the tenant is billed automatically on the 1st.
       security:
         - bearerAuth: []
       parameters:
@@ -587,6 +618,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TenantResponse"
+
+  /api/tenants:
+    get:
+      tags: [Step 5 - Tenants]
+      summary: List all tenants of the owner
+      description: Every tenant across the owner's properties, with balance owed and credit held.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, notice_given, moved_out, inactive]
+      responses:
+        "200":
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
 
   /api/tenants/{tenant_id}:
     get:
@@ -629,6 +685,9 @@ paths:
     post:
       tags: [Step 5 - Tenants]
       summary: Move tenant out
+      description: |
+        The move-out month is settled by the property's `move_out_billing` rule,
+        later charges are voided, and anything overpaid becomes tenant credit.
       security:
         - bearerAuth: []
       parameters:
@@ -2202,7 +2261,7 @@ components:
       properties:
         account_for:
           type: string
-          enum: [rent, water]
+          enum: [rent, water, electricity]
         account:
           $ref: "#/components/schemas/MpesaAccount"
         property_id:
@@ -2222,7 +2281,7 @@ components:
               format: uuid
             account_for:
               type: string
-              enum: [rent, water]
+              enum: [rent, water, electricity]
             expires_at:
               type: string
               format: date-time
@@ -2233,7 +2292,6 @@ components:
         - name
         - location
         - rent_connection_id
-        - water_connection_id
       properties:
         name: { type: string, example: Green View Apartments }
         location: { type: string, example: Kilimani, Nairobi }
@@ -2242,7 +2300,27 @@ components:
           enum: [apartment_block, bedsitters, mixed_use, single_rooms]
           default: apartment_block
         expected_units: { type: integer, minimum: 0, example: 24 }
-        rent_due_day: { type: string, example: 5th of every month }
+        rent_due_day:
+          type: integer
+          minimum: 1
+          maximum: 28
+          description: Day of the month rent is due.
+          example: 5
+        move_in_billing:
+          type: string
+          enum: [prorated, full_month, free_until_next_month]
+          default: prorated
+          description: |
+            How the move-in month is billed. `prorated` bills
+            rent x (days in month - move-in day) / days in month.
+            Moving in on the 1st is always a full month.
+        move_out_billing:
+          type: string
+          enum: [prorated, full_month]
+          default: prorated
+          description: |
+            How the move-out month is billed. `prorated` bills
+            rent x move-out day / days in month.
         sms_sender_id:
           type: string
           nullable: true
@@ -2263,6 +2341,13 @@ components:
         water_connection_id:
           type: string
           format: uuid
+          nullable: true
+          description: Optional. Without it, water is paid through the rent account.
+        electricity_connection_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Optional. Without it, electricity is paid through the rent account.
 
     Property:
       type: object
@@ -2273,7 +2358,9 @@ components:
         location: { type: string }
         property_type: { type: string }
         expected_units: { type: integer }
-        rent_due_day: { type: string }
+        rent_due_day: { type: integer, example: 5 }
+        move_in_billing: { type: string }
+        move_out_billing: { type: string }
         water_billing_method: { type: string }
         water_rate_per_unit: { type: number }
         water_fixed_fee: { type: number }
@@ -2282,7 +2369,12 @@ components:
           nullable: true
         status: { type: string, example: active }
         rent_account: {}
-        water_account: {}
+        water_account:
+          nullable: true
+          description: Null when water is paid through the rent account.
+        electricity_account:
+          nullable: true
+          description: Null when electricity is paid through the rent account.
         summary:
           type: object
           properties:
@@ -2310,7 +2402,27 @@ components:
           type: string
           enum: [apartment_block, bedsitters, mixed_use, single_rooms]
         expected_units: { type: integer, minimum: 0, example: 24 }
-        rent_due_day: { type: string, example: 5th of every month }
+        rent_due_day:
+          type: integer
+          minimum: 1
+          maximum: 28
+          description: Day of the month rent is due.
+          example: 5
+        move_in_billing:
+          type: string
+          enum: [prorated, full_month, free_until_next_month]
+          default: prorated
+          description: |
+            How the move-in month is billed. `prorated` bills
+            rent x (days in month - move-in day) / days in month.
+            Moving in on the 1st is always a full month.
+        move_out_billing:
+          type: string
+          enum: [prorated, full_month]
+          default: prorated
+          description: |
+            How the move-out month is billed. `prorated` bills
+            rent x move-out day / days in month.
         sms_sender_id:
           type: string
           nullable: true
@@ -2362,6 +2474,16 @@ components:
         water_meter_number:
           type: string
           nullable: true
+        electricity_monthly_charge:
+          type: number
+          nullable: true
+          description: Optional fixed amount billed with rent on the 1st of every month.
+          example: 2000
+        electricity_deposit:
+          type: number
+          nullable: true
+          description: Optional one-off deposit charged in full when a tenant moves in.
+          example: 2000
         status:
           type: string
           enum: [vacant, reserved, maintenance, inactive]
@@ -2382,6 +2504,15 @@ components:
         water_deposit: { type: number, example: 2000 }
         water_billing_method: { type: string }
         status: { type: string }
+        current_tenant:
+          type: object
+          nullable: true
+          description: The active tenant and their outstanding balance, if the unit is occupied.
+          properties:
+            tenant_id: { type: integer }
+            full_name: { type: string }
+            status: { type: string }
+            balance: { type: number }
 
     UnitResponse:
       type: object
@@ -2462,6 +2593,13 @@ components:
         property_id: { type: integer }
         unit_id: { type: integer }
         unit_number: { type: string }
+        property_name: { type: string }
+        balance:
+          type: number
+          description: Outstanding amount across open charges. On list and profile responses.
+        credit_balance:
+          type: number
+          description: Overpayment held as credit. On list and profile responses.
         full_name: { type: string }
         phone: { type: string }
         payment_phone: { type: string }
@@ -2508,7 +2646,7 @@ components:
           enum: [cash, mpesa, bank, other]
         account_for:
           type: string
-          enum: [rent, water]
+          enum: [rent, water, electricity]
           default: rent
         received_at:
           type: string
@@ -2798,7 +2936,7 @@ components:
         default_rent_due_day:
           type: integer
           minimum: 1
-          maximum: 31
+          maximum: 28
           example: 5
 
     NotificationPreferencesRequest:

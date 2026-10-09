@@ -90,6 +90,20 @@ const move_out_schema = z.object({
     .optional(),
 });
 
+const list_tenants_schema = z.object({
+  property_id: z.coerce.number()
+    .int()
+    .positive()
+    .optional(),
+
+  status: z.enum([
+    "active",
+    "notice_given",
+    "moved_out",
+    "inactive",
+  ]).optional(),
+});
+
 function validate(schema, data) {
   const result = schema.safeParse(data);
 
@@ -130,6 +144,9 @@ module.exports = {
 
   validate_update_tenant: (data) =>
     validate(update_tenant_schema, data),
+
+  validate_list_tenants: (data) =>
+    validate(list_tenants_schema, data),
 
   validate_move_out: (data) =>
     validate(move_out_schema, data),

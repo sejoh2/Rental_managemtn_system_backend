@@ -5,6 +5,7 @@ const {
   validate_create_property,
   validate_update_property,
   validate_replace_account,
+  validate_remove_account,
 } = require("./property_validator");
 
 const payment_service =
@@ -172,6 +173,40 @@ async function replace_payment_account(req, res, next) {
   }
 }
 
+async function remove_payment_account(req, res, next) {
+  try {
+    const property_id = Number(req.params.property_id);
+
+    if (!Number.isInteger(property_id) || property_id < 1) {
+      return res.status(422).json({
+        success: false,
+        error: "A valid property ID is required.",
+      });
+    }
+
+    const { account_for } = validate_remove_account({
+      account_for: req.params.account_for,
+    });
+
+    const property =
+      await property_service.remove_payment_account(
+        req.user,
+        property_id,
+        account_for,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Payment account removed successfully.",
+      data: property,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function archive_property(req, res, next) {
   try {
     const property_id = Number(req.params.property_id);
@@ -295,6 +330,7 @@ module.exports = {
   get_property,
   update_property,
   replace_payment_account,
+  remove_payment_account,
   archive_property,
   reregister_payment_account_c2b_urls,
   c2b_validation,

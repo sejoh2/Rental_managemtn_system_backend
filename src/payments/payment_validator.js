@@ -27,6 +27,7 @@ const manual_payment_schema = z.object({
   account_for: z.enum([
     "rent",
     "water",
+    "electricity",
   ]).default("rent"),
 
   received_at: z.string()

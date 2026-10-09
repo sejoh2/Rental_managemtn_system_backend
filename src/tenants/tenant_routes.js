@@ -26,6 +26,11 @@ router.post(
 );
 
 router.get(
+  "/tenants",
+  tenant_controller.list_tenants
+);
+
+router.get(
   "/tenants/:tenant_id",
   tenant_controller.get_tenant
 );

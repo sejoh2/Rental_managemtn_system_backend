@@ -60,6 +60,22 @@ const create_unit_schema = z.object({
     .nullable()
     .optional(),
 
+  /*
+    Optional fixed amount billed with rent each month.
+  */
+  electricity_monthly_charge: z.coerce.number()
+    .min(0)
+    .nullable()
+    .optional(),
+
+  /*
+    Optional one-off deposit charged in full at move-in.
+  */
+  electricity_deposit: z.coerce.number()
+    .min(0)
+    .nullable()
+    .optional(),
+
   status: z.enum(editable_statuses)
     .default("vacant"),
 }).superRefine((data, context) => {
@@ -141,6 +157,22 @@ const update_unit_schema = z.object({
   water_meter_number: z.string()
     .trim()
     .max(100)
+    .nullable()
+    .optional(),
+
+  /*
+    Optional fixed amount billed with rent each month.
+  */
+  electricity_monthly_charge: z.coerce.number()
+    .min(0)
+    .nullable()
+    .optional(),
+
+  /*
+    Optional one-off deposit charged in full at move-in.
+  */
+  electricity_deposit: z.coerce.number()
+    .min(0)
     .nullable()
     .optional(),
 

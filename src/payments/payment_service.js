@@ -16,6 +16,11 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
+const {
+  charge_priority_order_sql,
+  get_payable_charge_types,
+} = require("../billing/billing_service");
+
 function public_payment(payment) {
   return {
     id: Number(payment.id),
@@ -57,21 +62,6 @@ function public_payment(payment) {
 
     applied_to: payment.applied_to || [],
   };
-}
-
-function payment_priority(account_for) {
-  if (account_for === "water") {
-    return [
-      "water_deposit",
-      "water",
-    ];
-  }
-
-  return [
-    "rent_deposit",
-    "water_deposit",
-    "rent",
-  ];
 }
 
 async function get_payment_with_context(
@@ -143,7 +133,9 @@ async function apply_payment_to_tenant(
 ) {
   let remaining_amount = Number(payment.amount);
 
-  const priorities = payment_priority(
+  const priorities = await get_payable_charge_types(
+    client,
+    tenant.property_id,
     payment.account_for
   );
 
@@ -155,13 +147,7 @@ async function apply_payment_to_tenant(
         AND charge_type = ANY($2)
         AND status IN ('open', 'partial')
       ORDER BY
-        CASE charge_type
-          WHEN 'rent_deposit' THEN 1
-          WHEN 'water_deposit' THEN 2
-          WHEN 'rent' THEN 3
-          WHEN 'water' THEN 4
-          ELSE 99
-        END,
+        ${charge_priority_order_sql},
         due_date ASC,
         id ASC
       FOR UPDATE

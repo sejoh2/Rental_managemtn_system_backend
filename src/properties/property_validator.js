@@ -1,5 +1,16 @@
 const { z } = require("zod");
 
+const move_in_billing_options = [
+  "prorated",
+  "full_month",
+  "free_until_next_month",
+];
+
+const move_out_billing_options = [
+  "prorated",
+  "full_month",
+];
+
 const mpesa_account_schema = z.object({
   provider_code: z.literal("mpesa"),
 
@@ -32,7 +43,7 @@ const mpesa_account_schema = z.object({
 });
 
 const connect_account_schema = z.object({
-  account_for: z.enum(["rent", "water"]),
+  account_for: z.enum(["rent", "water", "electricity"]),
   account: mpesa_account_schema,
 
   /*
@@ -46,7 +57,7 @@ const connect_account_schema = z.object({
 });
 
 const replace_account_schema = z.object({
-  account_for: z.enum(["rent", "water"]),
+  account_for: z.enum(["rent", "water", "electricity"]),
   connection_id: z.string().uuid(),
 });
 
@@ -67,11 +78,17 @@ const create_property_schema = z.object({
     .min(0)
     .default(0),
 
-  rent_due_day: z.string()
-    .trim()
+  rent_due_day: z.coerce.number()
+    .int()
     .min(1)
-    .max(100)
-    .default("5th of every month"),
+    .max(28)
+    .default(5),
+
+  move_in_billing: z.enum(move_in_billing_options)
+    .default("prorated"),
+
+  move_out_billing: z.enum(move_out_billing_options)
+    .default("prorated"),
 
   sms_sender_id: z.string()
     .trim()
@@ -111,17 +128,35 @@ const create_property_schema = z.object({
 
   rent_connection_id: z.string().uuid(),
 
-  water_connection_id: z.string().uuid(),
+  /*
+    Water and electricity accounts are optional. Without one,
+    those charges are paid through the rent account.
+  */
+  water_connection_id: z.string()
+    .uuid()
+    .nullable()
+    .optional(),
+
+  electricity_connection_id: z.string()
+    .uuid()
+    .nullable()
+    .optional(),
 }).superRefine((data, context) => {
+  const connection_ids = [
+    data.rent_connection_id,
+    data.water_connection_id,
+    data.electricity_connection_id,
+  ].filter(Boolean);
+
   if (
-    data.rent_connection_id ===
-    data.water_connection_id
+    new Set(connection_ids).size !==
+    connection_ids.length
   ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ["water_connection_id"],
+      path: ["rent_connection_id"],
       message:
-        "Rent and water must use separate payment-account connections.",
+        "Each payment account must use its own connection.",
     });
   }
 
@@ -159,10 +194,16 @@ const update_property_schema = z.object({
     .min(0)
     .optional(),
 
-  rent_due_day: z.string()
-    .trim()
+  rent_due_day: z.coerce.number()
+    .int()
     .min(1)
-    .max(100)
+    .max(28)
+    .optional(),
+
+  move_in_billing: z.enum(move_in_billing_options)
+    .optional(),
+
+  move_out_billing: z.enum(move_out_billing_options)
     .optional(),
 
   sms_sender_id: z.string()
@@ -176,6 +217,17 @@ const update_property_schema = z.object({
     message: "Provide at least one field to update.",
   }
 );
+
+/*
+  Every property keeps a rent account. Only the optional
+  water and electricity accounts can be removed.
+*/
+const remove_account_schema = z.object({
+  account_for: z.enum(["water", "electricity"], {
+    message:
+      "Only the water or electricity account can be removed. A property always needs a rent account.",
+  }),
+});
 
 function validate(schema, data) {
   const result = schema.safeParse(data);
@@ -202,6 +254,9 @@ module.exports = {
 
   validate_create_property: (data) =>
     validate(create_property_schema, data),
+
+  validate_remove_account: (data) =>
+    validate(remove_account_schema, data),
 
   validate_replace_account: (data) =>
     validate(replace_account_schema, data),

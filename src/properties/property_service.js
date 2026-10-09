@@ -47,7 +47,9 @@ function public_property(
     location: property.location,
     property_type: property.property_type,
     expected_units: Number(property.expected_units),
-    rent_due_day: property.rent_due_day,
+    rent_due_day: Number(property.rent_due_day),
+    move_in_billing: property.move_in_billing,
+    move_out_billing: property.move_out_billing,
 
     water_billing_method: property.water_billing_method,
     water_rate_per_unit: Number(
@@ -72,6 +74,12 @@ function public_property(
     water_account:
       accounts.find(
         (account) => account.account_for === "water"
+      ) || null,
+
+    electricity_account:
+      accounts.find(
+        (account) =>
+          account.account_for === "electricity"
       ) || null,
 
     /*
@@ -369,10 +377,11 @@ async function create_payment_account(
   account_for,
   connection
 ) {
-  const label =
-    account_for === "rent"
-      ? "Rent M-Pesa account"
-      : "Water M-Pesa account";
+  const label = {
+    rent: "Rent M-Pesa account",
+    water: "Water M-Pesa account",
+    electricity: "Electricity M-Pesa account",
+  }[account_for];
 
   const result = await client.query(
     `
@@ -438,51 +447,64 @@ async function create_property(owner, data, ip_address) {
   try {
     await client.query("BEGIN");
 
-    const rent_connection = await get_connection_check(
-      client,
-      owner.user_id,
-      data.rent_connection_id,
-      "rent"
-    );
+    /*
+      Rent is required. Water and electricity accounts are
+      optional; without one, those charges are paid through
+      the rent account.
+    */
+    const connections = [];
 
-    const water_connection = await get_connection_check(
-      client,
-      owner.user_id,
-      data.water_connection_id,
-      "water"
+    for (const [account_for, connection_id] of [
+      ["rent", data.rent_connection_id],
+      ["water", data.water_connection_id],
+      ["electricity", data.electricity_connection_id],
+    ]) {
+      if (!connection_id) {
+        continue;
+      }
+
+      connections.push({
+        account_for,
+        connection_id,
+        connection: await get_connection_check(
+          client,
+          owner.user_id,
+          connection_id,
+          account_for
+        ),
+      });
+    }
+
+    const business_numbers = connections.map(
+      (item) => item.connection.business_number
     );
 
     if (
-      rent_connection.business_number ===
-      water_connection.business_number
+      new Set(business_numbers).size !==
+      business_numbers.length
     ) {
       const error = new Error(
-        "Rent and water accounts must use different M-Pesa business numbers."
+        "Each payment account must use a different M-Pesa business number."
       );
 
       error.status_code = 422;
       throw error;
     }
 
-    await ensure_business_number_available(
-      rent_connection.business_number
-    );
-
-    await ensure_business_number_available(
-      water_connection.business_number
-    );
+    for (const business_number of business_numbers) {
+      await ensure_business_number_available(
+        business_number
+      );
+    }
 
     const { validation_url, confirmation_url } =
       get_callback_urls();
 
     /*
-      Daraja registration occurs only now, once both Connect
-      checks succeeded and the property is actually being created.
+      Daraja registration occurs only now, once every Connect
+      check succeeded and the property is actually being created.
     */
-    for (const connection of [
-      rent_connection,
-      water_connection,
-    ]) {
+    for (const { connection } of connections) {
       const credentials = decrypt_json(
         connection.encrypted_credentials
       );
@@ -507,6 +529,8 @@ async function create_property(owner, data, ip_address) {
           property_type,
           expected_units,
           rent_due_day,
+          move_in_billing,
+          move_out_billing,
           water_billing_method,
           water_rate_per_unit,
           water_fixed_fee,
@@ -517,7 +541,7 @@ async function create_property(owner, data, ip_address) {
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14
+          $11,$12,$13,$14,$15,$16
         )
         RETURNING id
       `,
@@ -529,6 +553,8 @@ async function create_property(owner, data, ip_address) {
         data.property_type,
         data.expected_units,
         data.rent_due_day,
+        data.move_in_billing,
+        data.move_out_billing,
         data.water_billing_method,
         data.water_rate_per_unit,
         data.water_fixed_fee,
@@ -541,21 +567,15 @@ async function create_property(owner, data, ip_address) {
 
     const property_id = property_result.rows[0].id;
 
-    await create_payment_account(
-      client,
-      owner.user_id,
-      property_id,
-      "rent",
-      rent_connection
-    );
-
-    await create_payment_account(
-      client,
-      owner.user_id,
-      property_id,
-      "water",
-      water_connection
-    );
+    for (const item of connections) {
+      await create_payment_account(
+        client,
+        owner.user_id,
+        property_id,
+        item.account_for,
+        item.connection
+      );
+    }
 
     await client.query(
       `
@@ -566,10 +586,9 @@ async function create_property(owner, data, ip_address) {
         WHERE id = ANY($1)
       `,
       [
-        [
-          data.rent_connection_id,
-          data.water_connection_id,
-        ],
+        connections.map(
+          (item) => item.connection_id
+        ),
       ]
     );
 
@@ -582,10 +601,11 @@ async function create_property(owner, data, ip_address) {
       entity_id: property_id,
       metadata: {
         property_name: data.name,
-        rent_business_number:
-          rent_connection.business_number,
-        water_business_number:
-          water_connection.business_number,
+        payment_accounts: connections.map((item) => ({
+          account_for: item.account_for,
+          business_number:
+            item.connection.business_number,
+        })),
       },
       ip_address,
     });
@@ -616,6 +636,8 @@ async function update_property(
     "property_type",
     "expected_units",
     "rent_due_day",
+    "move_in_billing",
+    "move_out_billing",
     "sms_sender_id",
   ];
 
@@ -840,6 +862,61 @@ async function replace_payment_account(
   } finally {
     client.release();
   }
+}
+
+/*
+  Removes a property's optional water or electricity account.
+  Those charges are then paid through the rent account.
+
+  The row is kept and marked inactive so earlier payments keep
+  pointing at it, and its business number becomes free again.
+*/
+async function remove_payment_account(
+  owner,
+  property_id,
+  account_for,
+  ip_address
+) {
+  const { account } = await get_property_payment_account(
+    db,
+    owner.user_id,
+    property_id,
+    account_for
+  );
+
+  if (!account || account.status !== "active") {
+    const error = new Error(
+      `This property does not have a separate ${account_for} account.`
+    );
+
+    error.status_code = 404;
+    throw error;
+  }
+
+  await db.query(
+    `
+      UPDATE payment_accounts
+      SET
+        status = 'inactive',
+        connection_status = 'not_connected'
+      WHERE id = $1
+    `,
+    [account.id]
+  );
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "PROPERTY_PAYMENT_ACCOUNT_REMOVED",
+    entity_type: "property",
+    entity_id: property_id,
+    metadata: {
+      account_for,
+      business_number: account.business_number,
+    },
+    ip_address,
+  });
+
+  return get_property_by_id(owner, property_id);
 }
 
 async function get_property_by_id(owner, property_id) {
@@ -1229,6 +1306,7 @@ module.exports = {
   create_property,
   update_property,
   replace_payment_account,
+  remove_payment_account,
   get_property_by_id,
   list_properties,
   archive_property,
