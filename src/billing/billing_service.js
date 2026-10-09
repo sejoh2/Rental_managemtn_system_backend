@@ -27,9 +27,9 @@ const BILLING_TIME_ZONE = "Africa/Nairobi";
   Which charges a payment into each property account may settle,
   in the order they are settled.
 
-  Electricity and water money goes to its own account when the
-  property has one. Otherwise those charges are settled through
-  the rent account, after rent.
+  Electricity and water money, including their deposits, goes
+  to its own account when the property has one. Otherwise those
+  charges are settled through the rent account.
 */
 const charge_priority_order_sql = `
   CASE charge_type
@@ -72,7 +72,6 @@ async function get_payable_charge_types(
 
   const charge_types = [
     "rent_deposit",
-    "water_deposit",
     "rent",
   ];
 
@@ -84,7 +83,7 @@ async function get_payable_charge_types(
   }
 
   if (!accounts.includes("water")) {
-    charge_types.push("water");
+    charge_types.push("water_deposit", "water");
   }
 
   return charge_types;
@@ -514,6 +513,7 @@ async function run_monthly_billing() {
         DO NOTHING
         RETURNING
           tenant_id,
+          owner_id,
           charge_type,
           amount_due,
           TO_CHAR(
@@ -554,12 +554,35 @@ async function run_monthly_billing() {
       credit_applied,
     };
 
-    if (summary.charges_created > 0) {
+    /*
+      One audit entry per owner account that was billed.
+    */
+    const owner_ids = [
+      ...new Set(result.rows.map((row) => row.owner_id)),
+    ];
+
+    for (const owner_id of owner_ids) {
+      const owner_rows = result.rows.filter(
+        (row) => row.owner_id === owner_id
+      );
+
       await log_audit({
         user_id: null,
+        owner_id,
         action: "MONTHLY_BILLING_RUN",
         entity_type: "billing",
-        metadata: summary,
+        metadata: {
+          billing_period: summary.billing_period,
+          charges_created: owner_rows.length,
+          tenants_billed: new Set(
+            owner_rows.map((row) => row.tenant_id)
+          ).size,
+          total_billed: owner_rows.reduce(
+            (total, row) =>
+              total + Number(row.amount_due),
+            0
+          ),
+        },
       });
     }
 

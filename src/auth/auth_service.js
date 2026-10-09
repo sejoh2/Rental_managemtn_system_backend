@@ -322,6 +322,17 @@ async function verify_otp(phone_input, code, ip_address) {
           : "Too many failed attempts. Request a new verification code."
       );
 
+      await log_audit({
+        user_id: otp_record.user_id || null,
+        action: "LOGIN_FAILED",
+        entity_type: "authentication",
+        metadata: {
+          phone,
+          attempts_remaining,
+        },
+        ip_address,
+      });
+
       error.attempts_remaining = attempts_remaining;
       throw error;
     }
@@ -448,7 +459,7 @@ async function refresh(refresh_token) {
   };
 }
 
-async function logout(refresh_token) {
+async function logout(refresh_token, ip_address) {
   try {
     const decoded =
       token_service.verify_refresh_token(refresh_token);
@@ -478,6 +489,14 @@ async function logout(refresh_token) {
           `,
           [token.refresh_token_id]
         );
+
+        await log_audit({
+          user_id: decoded.user_id,
+          action: "LOGOUT",
+          entity_type: "authentication",
+          entity_id: decoded.user_id,
+          ip_address,
+        });
 
         break;
       }

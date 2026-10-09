@@ -66,7 +66,10 @@ async function refresh_token(req, res, next) {
 }
 
 async function logout(req, res) {
-  await auth_service.logout(req.body?.refresh_token);
+  await auth_service.logout(
+    req.body?.refresh_token,
+    req.ip
+  );
 
   return res.status(200).json({
     success: true,

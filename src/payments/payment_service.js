@@ -19,6 +19,7 @@ const {
 const {
   charge_priority_order_sql,
   get_payable_charge_types,
+  apply_tenant_credits,
 } = require("../billing/billing_service");
 
 function public_payment(payment) {
@@ -425,6 +426,27 @@ async function receive_mpesa_c2b_confirmation(payload) {
 
     await client.query("COMMIT");
 
+    /*
+      Received automatically from Safaricom, so there is no
+      acting user; the entry belongs to the property's owner.
+    */
+    await log_audit({
+      user_id: null,
+      owner_id: account?.owner_id || null,
+      action: "MPESA_PAYMENT_RECEIVED",
+      entity_type: "payment",
+      entity_id: payment.id,
+      metadata: {
+        amount: payment.amount,
+        status: tenant ? "matched" : "unmatched",
+        tenant_id: tenant?.id || null,
+        account_for: account?.account_for || null,
+        business_number,
+        payer_phone: payer_phone || null,
+        provider_transaction_id,
+      },
+    });
+
     return {
       duplicate: false,
       payment_id: payment.id,
@@ -658,6 +680,14 @@ async function reverse_payment(
       `,
       [payment.id]
     );
+
+    /*
+      Charges this payment had settled are open again. If the
+      tenant holds credit from another payment, it settles them.
+    */
+    if (payment.tenant_id) {
+      await apply_tenant_credits(client, payment.tenant_id);
+    }
 
     const is_manual = payment.payment_source === "manual";
 

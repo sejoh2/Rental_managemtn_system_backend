@@ -21,6 +21,7 @@ const agreement_routes = require("./src/agreements/agreement_routes");
 const sms_routes = require("./src/sms/sms_routes");
 const report_routes = require("./src/reports/report_routes");
 const settings_routes = require("./src/settings/settings_routes");
+const admin_routes = require("./src/admin/admin_routes");
 
 const {
   not_found,
@@ -72,6 +73,12 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", auth_routes);
 app.use("/api/users", user_routes);
 app.use("/api/properties", property_routes);
+
+/*
+  Must stay above the routers mounted on "/api": those apply
+  their owner-only check to every path that reaches them.
+*/
+app.use("/api/admin", admin_routes);
 app.use("/api", unit_routes);
 app.use("/api", tenant_routes);
 app.use("/api", payment_routes);

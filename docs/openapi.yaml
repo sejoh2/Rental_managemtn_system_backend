@@ -245,6 +245,62 @@ paths:
               schema:
                 $ref: "#/components/schemas/UserResponse"
 
+  /api/admin/audit-logs:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: List the audit log across all owner accounts
+      description: |
+        Admin only. Each entry names the person who acted (`actor`) and the owner
+        account it happened in (`account`). Automatic entries have no actor.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: owner_id
+          in: query
+          description: Only entries belonging to this owner account.
+          schema: { type: integer }
+        - name: user_id
+          in: query
+          description: Only entries performed by this user.
+          schema: { type: integer }
+        - name: action
+          in: query
+          schema: { type: string, example: MANUAL_PAYMENT_RECORDED }
+        - name: from_date
+          in: query
+          schema: { type: string, format: date }
+        - name: to_date
+          in: query
+          schema: { type: string, format: date }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+      responses:
+        "200":
+          description: Audit entries, newest first, with the total matching the filters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/audit-logs/actions:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: List the action names present in the audit log
+      description: Admin only. Used to fill the action filter.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Action names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/properties/c2b/validation:
     post:
       tags: [Step 3 - Properties and M-Pesa]

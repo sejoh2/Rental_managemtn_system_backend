@@ -514,16 +514,8 @@ async function list_audit_logs(
         ON users.user_id = audit_logs.user_id
 
       WHERE
-        audit_logs.user_id = $1
-
-        OR EXISTS (
-          SELECT 1
-          FROM users AS caretaker_users
-          WHERE caretaker_users.user_id =
-            audit_logs.user_id
-            AND caretaker_users.role = 'caretaker'
-            AND caretaker_users.owner_id = $1
-        )
+        audit_logs.owner_id = $1
+        OR audit_logs.user_id = $1
 
       ORDER BY audit_logs.created_at DESC
       LIMIT $2

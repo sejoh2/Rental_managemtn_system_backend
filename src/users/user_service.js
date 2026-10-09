@@ -118,6 +118,7 @@ async function promote_to_owner({
 
     await log_audit({
       user_id: admin_user.user_id,
+      owner_id: promoted_user.user_id,
       action: "USER_PROMOTED_TO_OWNER",
       entity_type: "user",
       entity_id: promoted_user.user_id,
@@ -191,6 +192,10 @@ async function deactivate_user({
 
   await log_audit({
     user_id: admin_user.user_id,
+    owner_id:
+      user.role === "owner"
+        ? user.user_id
+        : user.owner_id || null,
     action: "USER_DEACTIVATED",
     entity_type: "user",
     entity_id: user.user_id,
@@ -235,6 +240,10 @@ async function activate_user({
 
   await log_audit({
     user_id: admin_user.user_id,
+    owner_id:
+      user.role === "owner"
+        ? user.user_id
+        : user.owner_id || null,
     action: "USER_ACTIVATED",
     entity_type: "user",
     entity_id: user.user_id,

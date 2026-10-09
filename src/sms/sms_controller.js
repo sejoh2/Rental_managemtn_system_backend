@@ -1,6 +1,10 @@
 const sms_service = require("./sms_service");
 
 const {
+  log_audit,
+} = require("../audit/audit_service");
+
+const {
   validate_create_template,
   validate_update_template,
   validate_recipient_target,
@@ -21,6 +25,15 @@ async function create_template(req, res, next) {
         req.user,
         data
       );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_TEMPLATE_CREATED",
+      entity_type: "sms_template",
+      entity_id: template.id,
+      metadata: { name: template.name },
+      ip_address: req.ip,
+    });
 
     return res.status(201).json({
       success: true,
@@ -62,6 +75,18 @@ async function update_template(req, res, next) {
         data
       );
 
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_TEMPLATE_UPDATED",
+      entity_type: "sms_template",
+      entity_id: template.id,
+      metadata: {
+        name: template.name,
+        updated_fields: Object.keys(data),
+      },
+      ip_address: req.ip,
+    });
+
     return res.status(200).json({
       success: true,
       message: "SMS template updated successfully.",
@@ -82,6 +107,15 @@ async function delete_template(req, res, next) {
       req.user,
       template_id
     );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_TEMPLATE_DELETED",
+      entity_type: "sms_template",
+      entity_id: template_id,
+      metadata: null,
+      ip_address: req.ip,
+    });
 
     return res.status(200).json({
       success: true,
@@ -122,6 +156,23 @@ async function create_broadcast(req, res, next) {
         req.user,
         data
       );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: data.send_at
+        ? "SMS_BROADCAST_SCHEDULED"
+        : "SMS_BROADCAST_SENT",
+      entity_type: "sms_broadcast",
+      entity_id: broadcast.id,
+      metadata: {
+        recipient_group: broadcast.recipient_group,
+        property_id: broadcast.property_id,
+        tenant_id: broadcast.tenant_id,
+        recipient_count: broadcast.recipient_count,
+        scheduled_at: data.send_at || null,
+      },
+      ip_address: req.ip,
+    });
 
     return res.status(201).json({
       success: true,
@@ -205,6 +256,15 @@ async function cancel_broadcast(req, res, next) {
         broadcast_id
       );
 
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_BROADCAST_CANCELLED",
+      entity_type: "sms_broadcast",
+      entity_id: broadcast.id,
+      metadata: null,
+      ip_address: req.ip,
+    });
+
     return res.status(200).json({
       success: true,
       message: "Scheduled SMS broadcast cancelled.",
@@ -225,6 +285,15 @@ async function retry_message(req, res, next) {
       req.user,
       message_id
     );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_MESSAGE_RETRIED",
+      entity_type: "sms_message",
+      entity_id: message_id,
+      metadata: null,
+      ip_address: req.ip,
+    });
 
     return res.status(200).json({
       success: true,

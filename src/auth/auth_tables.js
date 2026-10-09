@@ -140,6 +140,51 @@ async function init_auth_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    Each audit entry records the owner account it belongs to,
+    so an administrator can follow one account's history.
+    Older entries are filled in from the acting user, or from
+    the user an admin action was performed on.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE audit_logs
+      ADD COLUMN IF NOT EXISTS owner_id BIGINT
+      REFERENCES users(user_id)
+      ON DELETE SET NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_owner_id
+      ON audit_logs(owner_id);
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action
+      ON audit_logs(action);
+
+    UPDATE audit_logs
+    SET owner_id = CASE
+      WHEN users.role = 'owner' THEN users.user_id
+      ELSE users.owner_id
+    END
+    FROM users
+    WHERE users.user_id = audit_logs.user_id
+      AND audit_logs.owner_id IS NULL
+      AND users.role IN ('owner', 'caretaker');
+
+    UPDATE audit_logs
+    SET owner_id = CASE
+      WHEN users.role = 'owner' THEN users.user_id
+      ELSE users.owner_id
+    END
+    FROM users
+    WHERE users.user_id = audit_logs.entity_id
+      AND audit_logs.owner_id IS NULL
+      AND audit_logs.action IN (
+        'USER_PROMOTED_TO_OWNER',
+        'USER_ACTIVATED',
+        'USER_DEACTIVATED'
+      )
+      AND users.role IN ('owner', 'caretaker');
+  `);
+
   await seed_admin_user();
 
   console.log("[AUTH] Authentication tables initialized.");
