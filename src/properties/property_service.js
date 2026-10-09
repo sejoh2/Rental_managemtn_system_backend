@@ -34,7 +34,11 @@ function public_account(account) {
   };
 }
 
-function public_property(property, accounts) {
+function public_property(
+  property,
+  accounts,
+  overview = {}
+) {
   return {
     id: Number(property.id),
     owner_id: Number(property.owner_id),
@@ -70,9 +74,57 @@ function public_property(property, accounts) {
         (account) => account.account_for === "water"
       ) || null,
 
+    /*
+      Lets the Properties page render its cards and details
+      panel without extra requests per property.
+    */
+    summary: {
+      total_units: Number(overview.total_units || 0),
+      occupied_units: Number(
+        overview.occupied_units || 0
+      ),
+      rent_collected_this_month: Number(
+        overview.rent_collected_this_month || 0
+      ),
+    },
+
+    caretaker: overview.caretaker_id
+      ? {
+        caretaker_id: Number(overview.caretaker_id),
+
+        full_name: [
+          overview.caretaker_first_name,
+          overview.caretaker_last_name,
+        ]
+          .filter(Boolean)
+          .join(" "),
+
+        phone: overview.caretaker_phone,
+
+        permission_level:
+          overview.caretaker_permission_level,
+      }
+      : null,
+
     created_at: property.created_at,
     updated_at: property.updated_at,
   };
+}
+
+function duplicate_name_error(error) {
+  if (
+    error.code === "23505" &&
+    error.constraint === "properties_owner_id_name_key"
+  ) {
+    const friendly_error = new Error(
+      "You already have a property with this name."
+    );
+
+    friendly_error.status_code = 409;
+    return friendly_error;
+  }
+
+  return error;
 }
 
 function get_callback_urls() {
@@ -95,8 +147,13 @@ function get_callback_urls() {
   };
 }
 
+/*
+  except_account_id lets a property keep its own business
+  number when its payment account is being reconnected.
+*/
 async function ensure_business_number_available(
-  business_number
+  business_number,
+  except_account_id = null
 ) {
   const result = await db.query(
     `
@@ -104,9 +161,13 @@ async function ensure_business_number_available(
       FROM payment_accounts
       WHERE business_number = $1
         AND status = 'active'
+        AND (
+          $2::BIGINT IS NULL
+          OR id <> $2
+        )
       LIMIT 1
     `,
-    [business_number]
+    [business_number, except_account_id]
   );
 
   if (result.rows.length) {
@@ -119,14 +180,74 @@ async function ensure_business_number_available(
   }
 }
 
+async function get_property_payment_account(
+  client,
+  owner_id,
+  property_id,
+  account_for,
+  lock = false
+) {
+  const property_result = await client.query(
+    `
+      SELECT id, name
+      FROM properties
+      WHERE id = $1
+        AND owner_id = $2
+        AND status != 'archived'
+    `,
+    [property_id, owner_id]
+  );
+
+  if (!property_result.rows[0]) {
+    const error = new Error("Property not found.");
+    error.status_code = 404;
+    throw error;
+  }
+
+  const account_result = await client.query(
+    `
+      SELECT *
+      FROM payment_accounts
+      WHERE property_id = $1
+        AND account_for = $2
+      ${lock ? "FOR UPDATE" : ""}
+    `,
+    [property_id, account_for]
+  );
+
+  return {
+    property: property_result.rows[0],
+    account: account_result.rows[0] || null,
+  };
+}
+
+/*
+  property_id is supplied only when an existing property is
+  changing one of its payment accounts.
+*/
 async function validate_payment_account_connection(
   owner,
   account_for,
   account,
-  ip_address
+  ip_address,
+  property_id = null
 ) {
+  let current_account_id = null;
+
+  if (property_id) {
+    const current = await get_property_payment_account(
+      db,
+      owner.user_id,
+      property_id,
+      account_for
+    );
+
+    current_account_id = current.account?.id || null;
+  }
+
   await ensure_business_number_available(
-    account.business_number
+    account.business_number,
+    current_account_id
   );
 
   /*
@@ -472,6 +593,249 @@ async function create_property(owner, data, ip_address) {
     return get_property_by_id(owner, property_id);
   } catch (error) {
     await client.query("ROLLBACK");
+    throw duplicate_name_error(error);
+  } finally {
+    client.release();
+  }
+}
+
+/*
+  Edits the descriptive property details only.
+  Water rules, payment accounts, and the caretaker keep
+  their own dedicated endpoints.
+*/
+async function update_property(
+  owner,
+  property_id,
+  data,
+  ip_address
+) {
+  const editable_fields = [
+    "name",
+    "location",
+    "property_type",
+    "expected_units",
+    "rent_due_day",
+    "sms_sender_id",
+  ];
+
+  const updated_fields = editable_fields.filter(
+    (field) => data[field] !== undefined
+  );
+
+  const assignments = updated_fields.map(
+    (field, index) => `${field} = $${index + 1}`
+  );
+
+  const values = updated_fields.map((field) =>
+    field === "sms_sender_id"
+      ? data[field] || null
+      : data[field]
+  );
+
+  let result;
+
+  try {
+    result = await db.query(
+      `
+        UPDATE properties
+        SET ${assignments.join(", ")}
+        WHERE id = $${values.length + 1}
+          AND owner_id = $${values.length + 2}
+          AND status != 'archived'
+        RETURNING id
+      `,
+      [...values, property_id, owner.user_id]
+    );
+  } catch (error) {
+    throw duplicate_name_error(error);
+  }
+
+  if (!result.rows[0]) {
+    const error = new Error("Property not found.");
+    error.status_code = 404;
+    throw error;
+  }
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "PROPERTY_UPDATED",
+    entity_type: "property",
+    entity_id: property_id,
+    metadata: { updated_fields },
+    ip_address,
+  });
+
+  return get_property_by_id(owner, property_id);
+}
+
+/*
+  Switches a property's rent or water account to a newly
+  validated M-Pesa connection.
+
+  The existing payment_accounts row is updated in place so
+  earlier payments keep pointing at their account.
+*/
+async function replace_payment_account(
+  owner,
+  property_id,
+  account_for,
+  connection_id,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const { account } = await get_property_payment_account(
+      client,
+      owner.user_id,
+      property_id,
+      account_for,
+      true
+    );
+
+    const connection = await get_connection_check(
+      client,
+      owner.user_id,
+      connection_id,
+      account_for
+    );
+
+    await ensure_business_number_available(
+      connection.business_number,
+      account?.id || null
+    );
+
+    const { validation_url, confirmation_url } =
+      get_callback_urls();
+
+    const credentials = decrypt_json(
+      connection.encrypted_credentials
+    );
+
+    try {
+      await register_c2b_urls({
+        consumer_key: credentials.consumer_key,
+        consumer_secret: credentials.consumer_secret,
+        business_number: connection.business_number,
+        environment: connection.environment,
+        validation_url,
+        confirmation_url,
+      });
+    } catch (error) {
+      const daraja_message = String(
+        error.response?.data?.errorMessage ||
+          error.response?.data?.ResponseDescription ||
+          error.message ||
+          "Daraja did not accept the C2B URL registration request."
+      );
+
+      const public_error = new Error(
+        `Daraja C2B URL registration failed: ${daraja_message}`
+      );
+
+      public_error.status_code = 502;
+      throw public_error;
+    }
+
+    if (account) {
+      await client.query(
+        `
+          UPDATE payment_accounts
+          SET
+            provider_code = $1,
+            account_type = $2,
+            display_name = $3,
+            account_name = $4,
+            business_number = $5,
+            connection_status = 'connected',
+            connection_error = NULL,
+            callback_registered_at = CURRENT_TIMESTAMP,
+            last_connection_test_at = CURRENT_TIMESTAMP,
+            status = 'active'
+          WHERE id = $6
+        `,
+        [
+          connection.provider_code,
+          connection.account_type,
+          connection.display_name,
+          connection.account_name,
+          connection.business_number,
+          account.id,
+        ]
+      );
+
+      await client.query(
+        `
+          INSERT INTO provider_credentials (
+            payment_account_id,
+            provider_code,
+            environment,
+            encrypted_credentials,
+            connection_status,
+            last_connected_at
+          )
+          VALUES ($1,$2,$3,$4,'connected',CURRENT_TIMESTAMP)
+          ON CONFLICT (payment_account_id)
+          DO UPDATE SET
+            provider_code = EXCLUDED.provider_code,
+            environment = EXCLUDED.environment,
+            encrypted_credentials =
+              EXCLUDED.encrypted_credentials,
+            connection_status = 'connected',
+            last_connected_at = CURRENT_TIMESTAMP
+        `,
+        [
+          account.id,
+          connection.provider_code,
+          connection.environment,
+          connection.encrypted_credentials,
+        ]
+      );
+    } else {
+      await create_payment_account(
+        client,
+        owner.user_id,
+        property_id,
+        account_for,
+        connection
+      );
+    }
+
+    await client.query(
+      `
+        UPDATE property_connection_checks
+        SET
+          status = 'used',
+          used_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `,
+      [connection_id]
+    );
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "PROPERTY_PAYMENT_ACCOUNT_CHANGED",
+      entity_type: "property",
+      entity_id: property_id,
+      metadata: {
+        account_for,
+        previous_business_number:
+          account?.business_number || null,
+        business_number: connection.business_number,
+        account_type: connection.account_type,
+        environment: connection.environment,
+      },
+      ip_address,
+    });
+
+    return get_property_by_id(owner, property_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
@@ -512,9 +876,80 @@ async function get_property_by_id(owner, property_id) {
     [property_id]
   );
 
+  /*
+    Rent collected follows the Reports definition:
+    allocations to rent charges, so deposits are excluded.
+  */
+  const overview_result = await db.query(
+    `
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM units
+          WHERE units.property_id = $1
+            AND units.status <> 'inactive'
+        ) AS total_units,
+
+        (
+          SELECT COUNT(*)
+          FROM units
+          WHERE units.property_id = $1
+            AND units.status = 'occupied'
+        ) AS occupied_units,
+
+        (
+          SELECT COALESCE(
+            SUM(payment_allocations.amount),
+            0
+          )
+          FROM payment_allocations
+          INNER JOIN payments
+            ON payments.id =
+              payment_allocations.payment_id
+          INNER JOIN tenant_charges
+            ON tenant_charges.id =
+              payment_allocations.tenant_charge_id
+          WHERE payments.property_id = $1
+            AND payments.status = 'matched'
+            AND tenant_charges.charge_type = 'rent'
+            AND payments.received_at >= DATE_TRUNC(
+              'month',
+              CURRENT_TIMESTAMP
+            )
+        ) AS rent_collected_this_month,
+
+        caretaker.caretaker_id,
+        caretaker.caretaker_first_name,
+        caretaker.caretaker_last_name,
+        caretaker.caretaker_phone,
+        caretaker.caretaker_permission_level
+
+      FROM (SELECT 1) AS single_row
+
+      LEFT JOIN LATERAL (
+        SELECT
+          users.user_id AS caretaker_id,
+          users.first_name AS caretaker_first_name,
+          users.last_name AS caretaker_last_name,
+          users.phone AS caretaker_phone,
+          property_caretaker_assignments.permission_level
+            AS caretaker_permission_level
+        FROM property_caretaker_assignments
+        INNER JOIN users
+          ON users.user_id =
+            property_caretaker_assignments.caretaker_id
+        WHERE property_caretaker_assignments.property_id = $1
+          AND property_caretaker_assignments.status = 'active'
+        LIMIT 1
+      ) AS caretaker ON TRUE
+    `,
+    [property_id]
+  );
+
   return public_property(
     property,
-    account_result.rows.map(public_account)
+    account_result.rows.map(public_account),
+    overview_result.rows[0]
   );
 }
 
@@ -792,6 +1227,8 @@ async function save_c2b_callback(event_type, payload) {
 module.exports = {
   validate_payment_account_connection,
   create_property,
+  update_property,
+  replace_payment_account,
   get_property_by_id,
   list_properties,
   archive_property,

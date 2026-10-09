@@ -12,6 +12,7 @@ function error_handler(error, req, res, next) {
     success: false,
     error: error.message || "Request failed.",
     details: error.details || undefined,
+    attempts_remaining: error.attempts_remaining,
   });
 }
 

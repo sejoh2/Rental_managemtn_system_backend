@@ -37,6 +37,11 @@ router.post(
   property_controller.connect_payment_account
 );
 
+router.put(
+  "/:property_id/payment-accounts/:account_for",
+  property_controller.replace_payment_account
+);
+
 router.post(
   "/:property_id/payment-accounts/:payment_account_id/register-c2b-urls",
   property_controller.reregister_payment_account_c2b_urls
@@ -55,6 +60,11 @@ router.get(
 router.post(
   "/",
   property_controller.create_property
+);
+
+router.patch(
+  "/:property_id",
+  property_controller.update_property
 );
 
 router.delete(

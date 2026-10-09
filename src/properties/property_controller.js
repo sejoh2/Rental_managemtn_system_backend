@@ -3,6 +3,8 @@ const property_service = require("./property_service");
 const {
   validate_connect_account,
   validate_create_property,
+  validate_update_property,
+  validate_replace_account,
 } = require("./property_validator");
 
 const payment_service =
@@ -10,7 +12,7 @@ const payment_service =
 
 async function connect_payment_account(req, res, next) {
   try {
-    const { account_for, account } =
+    const { account_for, account, property_id } =
       validate_connect_account(req.body);
 
     const result =
@@ -18,7 +20,8 @@ async function connect_payment_account(req, res, next) {
         req.user,
         account_for,
         account,
-        req.ip
+        req.ip,
+        property_id
       );
 
     return res.status(200).json({
@@ -94,6 +97,74 @@ async function get_property(req, res, next) {
 
     return res.status(200).json({
       success: true,
+      data: property,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function update_property(req, res, next) {
+  try {
+    const property_id = Number(req.params.property_id);
+
+    if (!Number.isInteger(property_id) || property_id < 1) {
+      return res.status(422).json({
+        success: false,
+        error: "A valid property ID is required.",
+      });
+    }
+
+    const data = validate_update_property(req.body);
+
+    const property =
+      await property_service.update_property(
+        req.user,
+        property_id,
+        data,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Property updated successfully.",
+      data: property,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function replace_payment_account(req, res, next) {
+  try {
+    const property_id = Number(req.params.property_id);
+
+    if (!Number.isInteger(property_id) || property_id < 1) {
+      return res.status(422).json({
+        success: false,
+        error: "A valid property ID is required.",
+      });
+    }
+
+    const { account_for, connection_id } =
+      validate_replace_account({
+        account_for: req.params.account_for,
+        connection_id: req.body?.connection_id,
+      });
+
+    const property =
+      await property_service.replace_payment_account(
+        req.user,
+        property_id,
+        account_for,
+        connection_id,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Payment account changed successfully.",
       data: property,
     });
   } catch (error) {
@@ -222,6 +293,8 @@ module.exports = {
   create_property,
   list_properties,
   get_property,
+  update_property,
+  replace_payment_account,
   archive_property,
   reregister_payment_account_c2b_urls,
   c2b_validation,
