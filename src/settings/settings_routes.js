@@ -20,36 +20,49 @@ const router = express.Router();
   Caretakers receive operational permissions only through
   their property assignment and Level 1 / Level 2 setting.
 */
-router.use(authenticate);
-router.use(require_role("owner"));
+/*
+  The guard is attached to each route, not to the whole router.
+  This router is mounted on "/api" next to the others, and a
+  router-wide check would also refuse requests meant for them.
+*/
+const guard = [
+  authenticate,
+  require_role("owner"),
+];
 
 router.get(
   "/settings",
+  guard,
   settings_controller.get_settings
 );
 
 router.patch(
   "/settings/profile",
+  guard,
   settings_controller.update_profile
 );
 
 router.patch(
   "/settings/defaults",
+  guard,
   settings_controller.update_defaults
 );
 
 router.patch(
   "/settings/notifications",
+  guard,
   settings_controller.update_notifications
 );
 
 router.get(
   "/settings/audit-logs",
+  guard,
   settings_controller.list_audit_logs
 );
 
 router.get(
   "/settings/properties/:property_id",
+  guard,
   settings_controller.get_property_settings
 );
 

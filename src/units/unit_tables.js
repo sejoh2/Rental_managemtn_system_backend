@@ -38,8 +38,8 @@ async function init_unit_tables() {
         Water deposit is a fixed business rule.
         It is charged later to a tenant during move-in.
       */
-      water_deposit NUMERIC(12,2) NOT NULL DEFAULT 2000
-        CHECK (water_deposit = 2000),
+      water_deposit NUMERIC(12,2) NOT NULL DEFAULT 0
+        CHECK (water_deposit >= 0),
 
       water_billing_method VARCHAR(50) NOT NULL
         CHECK (
@@ -119,6 +119,16 @@ async function init_unit_tables() {
         electricity_monthly_charge IS NULL
         OR electricity_monthly_charge >= 0
       );
+
+    ALTER TABLE units
+      DROP CONSTRAINT IF EXISTS units_water_deposit_check;
+
+    ALTER TABLE units
+      ADD CONSTRAINT units_water_deposit_check
+      CHECK (water_deposit >= 0);
+
+    ALTER TABLE units
+      ALTER COLUMN water_deposit SET DEFAULT 0;
 
     ALTER TABLE units
       ADD COLUMN IF NOT EXISTS electricity_deposit

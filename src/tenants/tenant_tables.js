@@ -40,8 +40,8 @@ async function init_tenant_tables() {
       rent_deposit_due NUMERIC(12,2) NOT NULL
         CHECK (rent_deposit_due >= 0),
 
-      water_deposit_due NUMERIC(12,2) NOT NULL DEFAULT 2000
-        CHECK (water_deposit_due = 2000),
+      water_deposit_due NUMERIC(12,2) NOT NULL DEFAULT 0
+        CHECK (water_deposit_due >= 0),
 
       /*
         Used later for bank / water payment matching.
@@ -125,6 +125,23 @@ async function init_tenant_tables() {
       BEFORE UPDATE ON tenants
       FOR EACH ROW
       EXECUTE FUNCTION update_updated_at_column();
+  `);
+
+  /*
+    The water deposit used to be fixed at KES 2,000. It is now
+    whatever the owner sets on the unit, including zero.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE tenants
+      DROP CONSTRAINT IF EXISTS tenants_water_deposit_due_check;
+
+    ALTER TABLE tenants
+      ADD CONSTRAINT tenants_water_deposit_due_check
+      CHECK (water_deposit_due >= 0);
+
+    ALTER TABLE tenants
+      ALTER COLUMN water_deposit_due SET DEFAULT 0;
   `);
 
   console.log("[TENANTS] Tenants table initialized.");

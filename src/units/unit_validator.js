@@ -42,6 +42,13 @@ const create_unit_schema = z.object({
 
   rent_deposit: z.coerce.number().min(0),
 
+  /*
+    Set by the owner. Zero means no water deposit.
+  */
+  water_deposit: z.coerce.number()
+    .min(0)
+    .default(0),
+
   water_billing_method: z.enum(water_billing_methods),
 
   water_fixed_monthly_bill: z.coerce.number()
@@ -138,6 +145,10 @@ const update_unit_schema = z.object({
     .optional(),
 
   rent_deposit: z.coerce.number()
+    .min(0)
+    .optional(),
+
+  water_deposit: z.coerce.number()
     .min(0)
     .optional(),
 

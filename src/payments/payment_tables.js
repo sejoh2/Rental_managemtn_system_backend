@@ -269,27 +269,21 @@ async function init_payment_tables() {
         due_date,
         amount_due
       )
-      VALUES
-        (
-          NEW.id,
-          NEW.owner_id,
-          NEW.property_id,
-          NEW.unit_id,
-          'rent_deposit',
-          DATE '1970-01-01',
-          NEW.move_in_date,
-          NEW.rent_deposit_due
-        ),
-        (
-          NEW.id,
-          NEW.owner_id,
-          NEW.property_id,
-          NEW.unit_id,
-          'water_deposit',
-          DATE '1970-01-01',
-          NEW.move_in_date,
-          NEW.water_deposit_due
-        )
+      SELECT
+        NEW.id,
+        NEW.owner_id,
+        NEW.property_id,
+        NEW.unit_id,
+        deposits.charge_type,
+        DATE '1970-01-01',
+        NEW.move_in_date,
+        deposits.amount
+      FROM (
+        VALUES
+          ('rent_deposit', NEW.rent_deposit_due),
+          ('water_deposit', NEW.water_deposit_due)
+      ) AS deposits (charge_type, amount)
+      WHERE deposits.amount > 0
       ON CONFLICT (tenant_id, charge_type, billing_period)
       DO NOTHING;
 
@@ -332,6 +326,7 @@ async function init_payment_tables() {
       move_in_date,
       rent_deposit_due
     FROM tenants
+    WHERE rent_deposit_due > 0
     ON CONFLICT (tenant_id, charge_type, billing_period)
     DO NOTHING;
 
@@ -355,6 +350,7 @@ async function init_payment_tables() {
       move_in_date,
       water_deposit_due
     FROM tenants
+    WHERE water_deposit_due > 0
     ON CONFLICT (tenant_id, charge_type, billing_period)
     DO NOTHING;
   `);

@@ -653,8 +653,8 @@ paths:
       tags: [Step 5 - Tenants]
       summary: Add tenant to a unit
       description: |
-        Unit becomes occupied immediately. The rent deposit and fixed KES 2,000 water
-        deposit are charged in full. The move-in month's rent, electricity, and fixed
+        Unit becomes occupied immediately. The unit's rent, water, and electricity
+        deposits are charged in full; a deposit of zero is not charged. The move-in month's rent, electricity, and fixed
         water follow the property's `move_in_billing` rule. From the next month on,
         the tenant is billed automatically on the 1st.
       security:
@@ -1006,6 +1006,9 @@ paths:
     post:
       tags: [Step 7 - Water billing]
       summary: Submit meter reading
+      description: |
+        Owner, or the caretaker assigned to the property. A reading lower than the
+        previous one is flagged and not billed until the owner corrects or rejects it.
       security:
         - bearerAuth: []
       parameters:
@@ -2585,6 +2588,11 @@ components:
           nullable: true
         monthly_rent: { type: number, example: 10000 }
         rent_deposit: { type: number, example: 10000 }
+        water_deposit:
+          type: number
+          default: 0
+          description: Set by the owner. Zero means no water deposit.
+          example: 2000
         water_billing_method:
           type: string
           enum: [fixed_monthly, per_unit_metered, included_in_rent]

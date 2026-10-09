@@ -14,29 +14,38 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate);
 
-router.use(
-  require_role("owner", "caretaker")
-);
+/*
+  The guard is attached to each route, not to the whole router.
+  This router is mounted on "/api" next to the others, and a
+  router-wide check would also refuse requests meant for them.
+*/
+const guard = [
+  authenticate,
+  require_role("owner", "caretaker"),
+];
 
 router.post(
   "/properties/:property_id/expenses",
+  guard,
   expense_controller.create_expense
 );
 
 router.get(
   "/expenses",
+  guard,
   expense_controller.list_expenses
 );
 
 router.get(
   "/expenses/summary",
+  guard,
   expense_controller.get_expense_summary
 );
 
 router.get(
   "/expenses/:expense_id",
+  guard,
   expense_controller.get_expense
 );
 
@@ -46,6 +55,7 @@ router.get(
 */
 router.post(
   "/expenses/:expense_id/void",
+  guard,
   expense_controller.void_expense
 );
 

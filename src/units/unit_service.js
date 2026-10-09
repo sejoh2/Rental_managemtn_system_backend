@@ -17,8 +17,7 @@ function public_unit(unit) {
     rent_deposit: Number(unit.rent_deposit),
 
     /*
-      Always returned so the frontend can show the
-      KES 2,000 fixed water deposit requirement.
+      Set by the owner. Zero means no water deposit.
     */
     water_deposit: Number(unit.water_deposit),
 
@@ -276,7 +275,7 @@ async function create_unit(
         electricity_deposit
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,2000,$7,$8,$9,$10,$11,$12,$13
+        $1,$2,$3,$4,$5,$6,$14,$7,$8,$9,$10,$11,$12,$13
       )
       RETURNING *
     `,
@@ -305,6 +304,8 @@ async function create_unit(
 
       data.electricity_monthly_charge || null,
       data.electricity_deposit || null,
+
+      data.water_deposit || 0,
     ]
   ).catch(throw_unit_number_conflict);
 
@@ -457,7 +458,9 @@ async function update_unit(
         electricity_deposit = CASE
           WHEN $14::BOOLEAN THEN $15::NUMERIC
           ELSE electricity_deposit
-        END
+        END,
+
+        water_deposit = COALESCE($16, water_deposit)
       WHERE id = $11
       RETURNING *
       ),
@@ -530,6 +533,8 @@ async function update_unit(
       ),
 
       data.electricity_deposit || null,
+
+      data.water_deposit ?? null,
     ]
   ).catch(throw_unit_number_conflict);
 

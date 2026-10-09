@@ -449,11 +449,22 @@ async function get_expense_summary(
           )
       ),
 
+      /*
+        Income is what payments actually settled: rent, water and
+        electricity bills. Deposits are held for the tenant, so
+        they are not income. This matches the Reports figures.
+      */
       selected_payments AS (
         SELECT
-          payments.amount,
-          payments.account_for
-        FROM payments
+          payment_allocations.amount,
+          tenant_charges.charge_type AS income_type
+        FROM payment_allocations
+        INNER JOIN payments
+          ON payments.id =
+            payment_allocations.payment_id
+        INNER JOIN tenant_charges
+          ON tenant_charges.id =
+            payment_allocations.tenant_charge_id
         WHERE payments.owner_id = $1
           AND payments.status = 'matched'
 
@@ -464,12 +475,18 @@ async function get_expense_summary(
 
           AND (
             $3::DATE IS NULL
-            OR payments.received_at::DATE >= $3
+            OR (
+              payments.received_at
+              AT TIME ZONE 'Africa/Nairobi'
+            )::DATE >= $3
           )
 
           AND (
             $4::DATE IS NULL
-            OR payments.received_at::DATE <= $4
+            OR (
+              payments.received_at
+              AT TIME ZONE 'Africa/Nairobi'
+            )::DATE <= $4
           )
 
           AND (
@@ -494,14 +511,20 @@ async function get_expense_summary(
         (
           SELECT COALESCE(SUM(amount), 0)
           FROM selected_payments
-          WHERE account_for = 'rent'
+          WHERE income_type = 'rent'
         ) AS rent_collected,
 
         (
           SELECT COALESCE(SUM(amount), 0)
           FROM selected_payments
-          WHERE account_for = 'water'
-        ) AS water_collected
+          WHERE income_type = 'water'
+        ) AS water_collected,
+
+        (
+          SELECT COALESCE(SUM(amount), 0)
+          FROM selected_payments
+          WHERE income_type = 'electricity'
+        ) AS electricity_collected
     `,
     [
       owner_id,
@@ -524,6 +547,10 @@ async function get_expense_summary(
     summary.water_collected
   );
 
+  const electricity_collected = Number(
+    summary.electricity_collected
+  );
+
   const total_expenses = Number(
     summary.total_expenses
   );
@@ -535,11 +562,13 @@ async function get_expense_summary(
 
     rent_collected,
     water_collected,
+    electricity_collected,
     total_expenses,
 
     net_profit:
       rent_collected +
-      water_collected -
+      water_collected +
+      electricity_collected -
       total_expenses,
   };
 }

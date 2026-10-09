@@ -24,46 +24,61 @@ const router = express.Router();
 /*
   Owner-facing routes.
 */
-router.use(authenticate);
-router.use(require_role("owner"));
+/*
+  The guard is attached to each route, not to the whole router.
+  This router is mounted on "/api" next to the others, and a
+  router-wide check would also refuse requests meant for them.
+*/
+const guard = [
+  authenticate,
+  require_role("owner"),
+];
 
 router.get(
   "/payments",
+  guard,
   payment_controller.list_payments
 );
 
 router.get(
   "/payments/stats",
+  guard,
   payment_controller.get_payment_stats
 );
 
 router.get(
   "/payments/unmatched",
+  guard,
   payment_controller.list_unmatched_payments
 );
 
 router.get(
   "/payments/:payment_id",
+  guard,
   payment_controller.get_payment
 );
 
 router.post(
   "/payments/:payment_id/match",
+  guard,
   payment_controller.match_payment
 );
 
 router.post(
   "/payments/:payment_id/reverse",
+  guard,
   payment_controller.reverse_payment
 );
 
 router.get(
   "/tenants/:tenant_id/payments",
+  guard,
   payment_controller.list_tenant_payments
 );
 
 router.post(
   "/tenants/:tenant_id/payments/manual",
+  guard,
   payment_controller.record_manual_payment
 );
 
@@ -72,6 +87,7 @@ router.post(
 */
 router.post(
   "/payments/mpesa/sandbox/simulate",
+  guard,
   payment_controller.simulate_sandbox_payment
 );
 

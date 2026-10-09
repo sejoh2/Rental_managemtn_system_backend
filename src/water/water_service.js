@@ -4,6 +4,10 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
+const {
+  get_caretaker_property_access,
+} = require("../caretakers/caretaker_access_service");
+
 function first_day_of_month(value) {
   const date = new Date(`${value}T00:00:00.000Z`);
 
@@ -68,6 +72,16 @@ function public_reading(reading) {
       ? Number(reading.tenant_charge_id)
       : null,
 
+    /*
+      Whether the bill this reading produced has been paid:
+      open, partial, paid, or void. Present on list responses.
+    */
+    bill_status: reading.bill_status || null,
+    bill_amount_paid:
+      reading.bill_amount_paid == null
+        ? null
+        : Number(reading.bill_amount_paid),
+
     reviewed_at: reading.reviewed_at,
     submitted_at: reading.submitted_at,
     created_at: reading.created_at,
@@ -102,6 +116,40 @@ async function ensure_owner_owns_property(
   }
 
   return result.rows[0];
+}
+
+/*
+  Readings may be handled by the owner or by a caretaker
+  assigned to the property. Returns the property and the
+  owner account it belongs to.
+*/
+async function ensure_property_access(
+  client,
+  user,
+  property_id
+) {
+  let owner_id = user.user_id;
+
+  if (user.role === "caretaker") {
+    await get_caretaker_property_access(
+      client,
+      user,
+      property_id
+    );
+
+    owner_id = user.owner_id;
+  }
+
+  const property = await ensure_owner_owns_property(
+    client,
+    owner_id,
+    property_id
+  );
+
+  return {
+    property,
+    owner_id: Number(owner_id),
+  };
 }
 
 function calculate_due_date(property, billing_period) {
@@ -365,11 +413,12 @@ async function submit_meter_reading(
   try {
     await client.query("BEGIN");
 
-    const property = await ensure_owner_owns_property(
-      client,
-      owner.user_id,
-      property_id
-    );
+    const { property, owner_id } =
+      await ensure_property_access(
+        client,
+        owner,
+        property_id
+      );
 
     const context_result = await client.query(
       `
@@ -507,6 +556,20 @@ async function submit_meter_reading(
       }
     }
 
+    /*
+      A unit has one reading per month. A reading that was
+      rejected is replaced by the new one.
+    */
+    await client.query(
+      `
+        DELETE FROM water_meter_readings
+        WHERE unit_id = $1
+          AND billing_period = $2
+          AND status = 'rejected'
+      `,
+      [unit.id, billing_period]
+    );
+
     const reading_result = await client.query(
       `
         INSERT INTO water_meter_readings (
@@ -536,7 +599,7 @@ async function submit_meter_reading(
         RETURNING *
       `,
       [
-        owner.user_id,
+        owner_id,
         property_id,
         unit.id,
         unit.tenant_id,
@@ -621,6 +684,10 @@ async function review_meter_reading(
       `
         SELECT
           water_meter_readings.*,
+          TO_CHAR(
+            water_meter_readings.billing_period,
+            'YYYY-MM-DD'
+          ) AS billing_period_text,
           properties.rent_due_day,
           properties.water_billing_day
         FROM water_meter_readings
@@ -674,6 +741,19 @@ async function review_meter_reading(
       );
 
       await client.query("COMMIT");
+
+      await log_audit({
+        user_id: owner.user_id,
+        action: "WATER_METER_READING_REJECTED",
+        entity_type: "water_meter_reading",
+        entity_id: reading.id,
+        metadata: {
+          unit_id: reading.unit_id,
+          tenant_id: reading.tenant_id,
+          notes: data.notes || null,
+        },
+        ip_address,
+      });
 
       return public_reading(updated.rows[0]);
     }
@@ -737,7 +817,11 @@ async function review_meter_reading(
           unit_id: reading.unit_id,
         },
         property: reading,
-        billing_period: reading.billing_period,
+        /*
+          The due-date calculation expects a 'YYYY-MM-DD'
+          string, not the Date object the column comes back as.
+        */
+        billing_period: reading.billing_period_text,
         amount: bill_amount,
       }
     );
@@ -933,9 +1017,9 @@ async function list_readings(
   const client = await db.get_client();
 
   try {
-    await ensure_owner_owns_property(
+    const { owner_id } = await ensure_property_access(
       client,
-      owner.user_id,
+      owner,
       property_id
     );
 
@@ -944,8 +1028,13 @@ async function list_readings(
         SELECT
           water_meter_readings.*,
           tenants.full_name AS tenant_name,
-          units.unit_number
+          units.unit_number,
+          tenant_charges.status AS bill_status,
+          tenant_charges.amount_paid AS bill_amount_paid
         FROM water_meter_readings
+        LEFT JOIN tenant_charges
+          ON tenant_charges.id =
+            water_meter_readings.tenant_charge_id
         LEFT JOIN tenants
           ON tenants.id =
             water_meter_readings.tenant_id
@@ -967,7 +1056,7 @@ async function list_readings(
           water_meter_readings.submitted_at DESC
       `,
       [
-        owner.user_id,
+        owner_id,
         property_id,
         filters.billing_period
           ? first_day_of_month(
@@ -992,9 +1081,9 @@ async function get_water_stats(
   const client = await db.get_client();
 
   try {
-    await ensure_owner_owns_property(
+    await ensure_property_access(
       client,
-      owner.user_id,
+      owner,
       property_id
     );
 
@@ -1031,7 +1120,28 @@ async function get_water_stats(
             WHERE property_id = $1
               AND billing_period = $2
               AND status = 'flagged'
-          ) AS flagged_readings
+          ) AS flagged_readings,
+
+          /*
+            Metered, occupied units still waiting for this
+            month's reading. A rejected reading does not count
+            as received.
+          */
+          (
+            SELECT COUNT(*)
+            FROM units
+            WHERE units.property_id = $1
+              AND units.water_billing_method =
+                'per_unit_metered'
+              AND units.status = 'occupied'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM water_meter_readings
+                WHERE water_meter_readings.unit_id = units.id
+                  AND water_meter_readings.billing_period = $2
+                  AND water_meter_readings.status <> 'rejected'
+              )
+          ) AS pending_readings
         FROM tenant_charges
         WHERE property_id = $1
           AND charge_type = 'water'
@@ -1053,6 +1163,9 @@ async function get_water_stats(
       open_bills: Number(stats.open_bills),
       flagged_readings: Number(
         stats.flagged_readings
+      ),
+      pending_readings: Number(
+        stats.pending_readings
       ),
     };
   } finally {
