@@ -16,6 +16,41 @@ function get_sms_client() {
 }
 
 /*
+  Africa's Talking answers 201 even when it turns a message
+  down (for example an unapproved sender ID), so the answer
+  itself has to be read. 100, 101 and 102 mean the message was
+  processed, sent or queued; anything else is a refusal.
+*/
+function check_provider_response(response, sender_id) {
+  const data = response?.SMSMessageData || {};
+  const recipient = (data.Recipients || [])[0];
+
+  if (
+    recipient &&
+    [100, 101, 102].includes(Number(recipient.statusCode))
+  ) {
+    return;
+  }
+
+  const reason =
+    recipient?.status ||
+    data.Message ||
+    "no reason given";
+
+  if (/InvalidSenderId/i.test(reason)) {
+    throw new Error(
+      `Africa's Talking refused the sender ID "${sender_id}". ` +
+      "It is not approved for this account. Remove it from the " +
+      "property, or have it approved, then send again."
+    );
+  }
+
+  throw new Error(
+    `Africa's Talking did not send this message: ${reason}.`
+  );
+}
+
+/*
   Used by both authentication OTPs and the SMS Centre.
 
   sender_id is optional. In live mode, it must be an Africa's Talking
@@ -74,6 +109,8 @@ async function send_sms({
 
   const response = await sms.send(options);
 
+  check_provider_response(response, final_sender_id);
+
   return {
     /*
       Africa's Talking accepts the message for processing here.
@@ -86,5 +123,6 @@ async function send_sms({
 }
 
 module.exports = {
+  check_provider_response,
   send_sms,
 };
