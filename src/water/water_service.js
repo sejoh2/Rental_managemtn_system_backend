@@ -5,6 +5,10 @@ const {
 } = require("../audit/audit_service");
 
 const {
+  alert_flagged_reading,
+} = require("./water_notification_service");
+
+const {
   get_caretaker_property_access,
 } = require("../caretakers/caretaker_access_service");
 
@@ -642,6 +646,19 @@ async function submit_meter_reading(
       },
       ip_address,
     });
+
+    /*
+      Tells the owner by SMS, if they switched that alert on.
+    */
+    if (suspicious) {
+      await alert_flagged_reading({
+        owner_id,
+        property,
+        unit_number: unit.unit_number,
+        previous_reading,
+        current_reading,
+      });
+    }
 
     return public_reading({
       ...reading,

@@ -43,6 +43,7 @@ tags:
   - name: Step 12 - SMS Centre
   - name: Step 13 - Reports
   - name: Step 14 - Settings
+  - name: Dashboard
 
 paths:
   /health:
@@ -2378,6 +2379,71 @@ paths:
                 type: string
                 format: binary
 
+  /api/dashboard/home:
+    get:
+      tags: [Dashboard]
+      summary: Figures for the owner's dashboard home
+      description: |
+        Owner only. Rent collected this month and last month, rent still
+        owed by current tenants, occupancy, the three latest unmatched
+        payments, this month's water, rent collected in each of the last six
+        months, and the eight latest events (payments, meter readings,
+        maintenance reports, tenants added). Months are Kenyan time.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          description: One property. Omit for all properties.
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Dashboard figures
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/dashboard/attention:
+    get:
+      tags: [Dashboard]
+      summary: Counts of what is waiting for the owner
+      description: |
+        Owner only. Unmatched payments, flagged meter readings, failed SMS
+        and open maintenance requests, with their total.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/dashboard/search:
+    get:
+      tags: [Dashboard]
+      summary: Search tenants and payments
+      description: |
+        Owner only. Tenants by name, phone, ID number or house number, and
+        payments by M-Pesa code or reference. At most six tenants and five
+        payments.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+      responses:
+        "200":
+          description: Matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/settings:
     get:
       tags: [Step 14 - Settings]
@@ -2440,7 +2506,12 @@ paths:
     patch:
       tags: [Step 14 - Settings]
       summary: Update notification preferences
-      description: Stores preferences. Automation delivery must be separately enabled by scheduled jobs.
+      description: |
+        Two preferences act today. `alert_suspicious_water` sends the owner
+        an SMS when a meter reading is flagged. `remind_water_readings`
+        sends each property's caretaker one SMS on the water billing day
+        (after 8 AM Kenyan time) if readings for the month are missing.
+        The other four are saved but do nothing yet.
       security:
         - bearerAuth: []
       requestBody:

@@ -106,6 +106,32 @@ async function init_water_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    One row per property per month once its caretaker has been
+    reminded about missing meter readings, so the reminder is
+    sent only once. Safe to run again.
+  */
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS water_reading_reminders (
+      property_id BIGINT NOT NULL
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+      billing_period DATE NOT NULL,
+
+      caretaker_id BIGINT
+        REFERENCES users(user_id)
+        ON DELETE SET NULL,
+
+      pending_units INTEGER NOT NULL DEFAULT 0,
+
+      sent_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+      PRIMARY KEY (property_id, billing_period)
+    );
+  `);
+
   console.log("[WATER] Tables initialized.");
 }
 

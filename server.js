@@ -53,6 +53,9 @@ const {
 const {
   start_billing_scheduler,
 } = require("./src/billing/billing_service");
+const {
+  start_water_reminder_scheduler,
+} = require("./src/water/water_notification_service");
 
 
 function require_environment_variable(name) {
@@ -122,6 +125,8 @@ async function start_server() {
     start_sms_scheduler();
 
     start_billing_scheduler();
+
+    start_water_reminder_scheduler();
 
     console.log("[BILLING] Monthly billing scheduler started.");
 
