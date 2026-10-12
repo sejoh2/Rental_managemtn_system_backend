@@ -9,6 +9,21 @@ const verify_otp_schema = z.object({
   code: z.string().trim().regex(/^\d{6}$/),
 });
 
+/*
+  Letters in any language, with spaces, dots, hyphens and
+  apostrophes: "Joseph Kamau", "Mary-Anne O'Brien".
+*/
+const name_schema = z.object({
+  full_name: z.string()
+    .trim()
+    .min(2, "Enter your name.")
+    .max(100, "Your name is too long.")
+    .regex(
+      /^\p{L}[\p{L}\s.'-]*$/u,
+      "Use letters only in your name."
+    ),
+});
+
 const refresh_token_schema = z.object({
   refresh_token: z.string().min(1),
 });
@@ -35,6 +50,7 @@ function validate(schema, data) {
 module.exports = {
   validate_request_otp: (data) => validate(phone_schema, data),
   validate_verify_otp: (data) => validate(verify_otp_schema, data),
+  validate_name: (data) => validate(name_schema, data),
   validate_refresh_token: (data) =>
     validate(refresh_token_schema, data),
 };

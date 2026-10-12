@@ -108,6 +108,46 @@ function render_message(template, tenant, variables = {}) {
   );
 }
 
+/*
+  Placeholders that quote what a tenant owes. A message using
+  any of them is a payment reminder.
+*/
+const money_placeholders = [
+  "balance",
+  "amount",
+  "due_date",
+  "days_overdue",
+];
+
+function asks_for_money(template, variables) {
+  const given = variables || {};
+
+  return money_placeholders.some(
+    (key) =>
+      given[key] === undefined &&
+      template.includes(`{${key}}`)
+  );
+}
+
+/*
+  A tenant who owes nothing does not get a payment reminder,
+  so nobody is asked to pay KES 0 by a blank date. Any other
+  message goes to everyone selected.
+*/
+function leave_out_settled(
+  recipients,
+  template,
+  variables
+) {
+  if (!asks_for_money(template, variables)) {
+    return recipients;
+  }
+
+  return recipients.filter(
+    (tenant) => as_number(tenant.balance) > 0
+  );
+}
+
 function public_template(template) {
   return {
     id: Number(template.id),
@@ -840,15 +880,30 @@ async function create_broadcast(owner, data) {
       Also checks that the property or tenant belongs to
       this owner.
     */
-    const recipients = await find_recipients(
+    const selected = await find_recipients(
       client,
       owner.user_id,
       data
     );
 
-    if (send_now && !recipients.length) {
+    const recipients = leave_out_settled(
+      selected,
+      message_template,
+      data.variables
+    );
+
+    if (send_now && !selected.length) {
       throw service_error(
         "No tenants match this recipient selection.",
+        422
+      );
+    }
+
+    if (send_now && !recipients.length) {
+      throw service_error(
+        selected.length === 1
+          ? `${selected[0].full_name} owes nothing, so this reminder was not sent.`
+          : "None of these tenants owes anything, so this reminder was not sent.",
         422
       );
     }
@@ -946,8 +1001,9 @@ async function create_broadcast(owner, data) {
 
 /*
   Works out a scheduled broadcast's recipients at the moment
-  it is sent. If nobody matches any more, it gets no messages
-  and simply completes.
+  it is sent. If nobody matches any more, or a reminder finds
+  that nobody owes anything, it gets no messages and simply
+  completes.
 */
 async function prepare_scheduled_messages(broadcast) {
   const client = await db.get_client();
@@ -979,7 +1035,11 @@ async function prepare_scheduled_messages(broadcast) {
     await create_messages(
       client,
       broadcast,
-      recipients
+      leave_out_settled(
+        recipients,
+        broadcast.message_template,
+        broadcast.variables
+      )
     );
 
     await client.query("COMMIT");

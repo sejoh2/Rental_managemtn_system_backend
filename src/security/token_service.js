@@ -3,11 +3,26 @@ const bcrypt = require("bcryptjs");
 
 const db = require("../config/db");
 
+/*
+  An account created by OTP is called "New User" until the
+  person gives their own name.
+*/
+function needs_name(user) {
+  const first_name = (user.first_name || "").trim();
+  const last_name = (user.last_name || "").trim();
+
+  return (
+    !first_name ||
+    (first_name === "New" && last_name === "User")
+  );
+}
+
 function public_user(user) {
   return {
     user_id: user.user_id,
     first_name: user.first_name,
     last_name: user.last_name,
+    needs_name: needs_name(user),
     phone: user.phone,
     role: user.role,
     owner_id: user.owner_id || null,
@@ -87,6 +102,7 @@ function verify_refresh_token(token) {
 }
 
 module.exports = {
+  needs_name,
   public_user,
   issue_tokens,
   verify_access_token,

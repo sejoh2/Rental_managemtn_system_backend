@@ -63,4 +63,10 @@ router.get(
   auth_controller.me
 );
 
+router.patch(
+  "/me/name",
+  authenticate,
+  auth_controller.set_name
+);
+
 module.exports = router;

@@ -6,6 +6,7 @@ const {
   validate_request_otp,
   validate_verify_otp,
   validate_refresh_token,
+  validate_name,
 } = require("./auth_validator");
 
 async function request_otp(req, res, next) {
@@ -84,7 +85,28 @@ async function me(req, res) {
   });
 }
 
+async function set_name(req, res, next) {
+  try {
+    const { full_name } = validate_name(req.body);
+
+    const user = await auth_service.set_name(
+      req.user,
+      full_name,
+      req.ip
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Name saved.",
+      user,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  set_name,
   request_otp,
   verify_otp,
   refresh_token,

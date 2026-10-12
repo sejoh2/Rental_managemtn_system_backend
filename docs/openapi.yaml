@@ -162,6 +162,42 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
 
+  /api/auth/me/name:
+    patch:
+      tags: [Step 1 - Authentication]
+      summary: Set the signed-in person's name
+      description: |
+        An account created by OTP is called "New User" and its
+        `needs_name` is true until the person gives their name here.
+        The first word becomes the first name and the rest the last name;
+        one word leaves the last name empty. Allowed only while
+        `needs_name` is true (409 afterwards; an owner changes their name
+        in Settings). Written to the audit log as PROFILE_NAME_SET.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name]
+              properties:
+                full_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Joseph Kamau
+      responses:
+        "200":
+          description: Name saved; returns the updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUserResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
   /api/users:
     get:
       tags: [Step 2 - Admin users]
@@ -2063,6 +2099,8 @@ paths:
         Uses real tenant balances and credits. Tenants who are active or have
         given notice are included. `estimated_cost` assumes one SMS per
         tenant; a message over 160 characters is billed as more.
+        Each recipient carries a `balance`: a payment reminder (see
+        Create broadcast) is not sent to those whose balance is 0.
       security:
         - bearerAuth: []
       requestBody:
@@ -2189,6 +2227,11 @@ paths:
         balances are worked out when the broadcast is sent, so
         `recipient_count` is 0 until then. If nobody matches at that time
         the broadcast completes with no messages.
+
+        A message that uses {balance}, {amount}, {due_date} or
+        {days_overdue} is a payment reminder and is not sent to a tenant
+        who owes nothing. Sent now, it is refused with 422 when every
+        selected tenant owes nothing.
       security:
         - bearerAuth: []
       requestBody:
