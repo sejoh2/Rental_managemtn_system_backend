@@ -28,90 +28,58 @@ function date_only(value) {
     .slice(0, 10);
 }
 
-function start_of_month(date) {
-  return new Date(
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(),
-      1
-    )
-  );
+/*
+  Today's date in Kenya, as 'YYYY-MM-DD'.
+*/
+function nairobi_today() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+  }).format(new Date());
 }
 
-function end_of_month(date) {
-  return new Date(
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth() + 1,
-      0
-    )
-  );
-}
 
 /*
   All report periods are inclusive:
   start_date <= data date <= end_date
 */
 function resolve_period(period) {
-  const now = new Date();
+  const today = nairobi_today();
 
-  let start_date;
-  let end_date;
+  const [year, month] = today
+    .split("-")
+    .map(Number);
 
-  if (period === "this_month") {
-    start_date = start_of_month(now);
-    end_date = now;
-  }
-
-  if (period === "last_month") {
-    const previous_month = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth() - 1,
-        1
-      )
+  /*
+    First and last day of the month that is 'offset' months
+    from this one.
+  */
+  const month_start = (offset) =>
+    date_only(
+      new Date(Date.UTC(year, month - 1 + offset, 1))
     );
 
-    start_date = start_of_month(previous_month);
-    end_date = end_of_month(previous_month);
-  }
-
-  if (period === "last_3_months") {
-    start_date = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth() - 2,
-        1
-      )
+  const month_end = (offset) =>
+    date_only(
+      new Date(Date.UTC(year, month + offset, 0))
     );
 
-    end_date = now;
-  }
+  const ranges = {
+    this_month: [month_start(0), today],
+    last_month: [month_start(-1), month_end(-1)],
+    last_3_months: [month_start(-2), today],
+    last_6_months: [month_start(-5), today],
+    this_year: [
+      date_only(new Date(Date.UTC(year, 0, 1))),
+      today,
+    ],
+  };
 
-  if (period === "last_6_months") {
-    start_date = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth() - 5,
-        1
-      )
-    );
-
-    end_date = now;
-  }
-
-  if (period === "this_year") {
-    start_date = new Date(
-      Date.UTC(now.getUTCFullYear(), 0, 1)
-    );
-
-    end_date = now;
-  }
+  const [start_date, end_date] = ranges[period];
 
   return {
     key: period,
-    start_date: date_only(start_date),
-    end_date: date_only(end_date),
+    start_date,
+    end_date,
   };
 }
 
@@ -234,6 +202,7 @@ async function get_occupancy_summary(
         ON properties.id = units.property_id
 
       WHERE properties.owner_id = $1
+        AND properties.status <> 'archived'
         AND (
           $2::BIGINT IS NULL
           OR units.property_id = $2
@@ -288,17 +257,43 @@ async function get_arrears_by_property(
           SUM(
             tenant_charges.amount_due -
             tenant_charges.amount_paid
+          ) FILTER (
+            WHERE tenants.status IN (
+              'active',
+              'notice_given'
+            )
           ),
           0
         ) AS arrears_amount,
 
         COUNT(DISTINCT tenant_charges.tenant_id)
           FILTER (
-            WHERE tenant_charges.status IN (
-              'open',
-              'partial'
+            WHERE tenants.status IN (
+              'active',
+              'notice_given'
             )
-          ) AS tenants_in_arrears
+          ) AS tenants_in_arrears,
+
+        COALESCE(
+          SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ) FILTER (
+            WHERE tenants.status NOT IN (
+              'active',
+              'notice_given'
+            )
+          ),
+          0
+        ) AS former_tenant_arrears,
+
+        COUNT(DISTINCT tenant_charges.tenant_id)
+          FILTER (
+            WHERE tenants.status NOT IN (
+              'active',
+              'notice_given'
+            )
+          ) AS former_tenants_in_arrears
 
       FROM properties
 
@@ -309,7 +304,11 @@ async function get_arrears_by_property(
           'partial'
         )
 
+      LEFT JOIN tenants
+        ON tenants.id = tenant_charges.tenant_id
+
       WHERE properties.owner_id = $1
+        AND properties.status <> 'archived'
         AND (
           $2::BIGINT IS NULL
           OR properties.id = $2
@@ -333,6 +332,9 @@ async function get_arrears_by_property(
     property_id: Number(row.property_id),
     property_name: row.property_name,
 
+    /*
+      Owed by tenants living there now.
+    */
     arrears_amount: as_number(
       row.arrears_amount
     ),
@@ -340,13 +342,29 @@ async function get_arrears_by_property(
     tenants_in_arrears: Number(
       row.tenants_in_arrears
     ),
+
+    /*
+      Still owed by tenants who have moved out.
+    */
+    former_tenant_arrears: as_number(
+      row.former_tenant_arrears
+    ),
+
+    former_tenants_in_arrears: Number(
+      row.former_tenants_in_arrears
+    ),
   }));
 }
 
 /*
-  Rent and water collection are calculated from allocations,
-  rather than merely the payment account. This avoids treating
-  deposits as monthly rent/water income.
+  Income is what payments actually settled, taken from their
+  allocations: rent, water, electricity, service charges,
+  repairs and move-out deductions. This is the same definition
+  the Expenses page uses.
+
+  Deposits are held for the tenant, so they are not income when
+  they are paid. Deposit and credit money used for a tenant's
+  bills at move-out becomes income on that day.
 */
 async function get_collection_summary(
   client,
@@ -374,47 +392,87 @@ async function get_collection_summary(
         WHERE payments.owner_id = $1
           AND payments.status = 'matched'
 
-          AND payments.received_at::DATE >= $2
-          AND payments.received_at::DATE <= $3
+          AND (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE >= $2
+
+          AND (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE <= $3
 
           AND (
             $4::BIGINT IS NULL
             OR payments.property_id = $4
           )
+
+        UNION ALL
+
+        SELECT
+          tenant_charges.charge_type,
+          deposit_applications.amount
+
+        FROM deposit_applications
+
+        INNER JOIN deposit_settlements
+          ON deposit_settlements.id =
+            deposit_applications.settlement_id
+
+        INNER JOIN tenant_charges
+          ON tenant_charges.id =
+            deposit_applications.tenant_charge_id
+
+        WHERE deposit_settlements.owner_id = $1
+
+          AND (
+            deposit_settlements.confirmed_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE >= $2
+
+          AND (
+            deposit_settlements.confirmed_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE <= $3
+
+          AND (
+            $4::BIGINT IS NULL
+            OR deposit_settlements.property_id = $4
+          )
       )
 
       SELECT
-        COALESCE(
-          SUM(amount)
-            FILTER (
-              WHERE charge_type = 'rent'
-            ),
-          0
-        ) AS rent_collected,
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'rent'
+        ), 0) AS rent_collected,
 
-        COALESCE(
-          SUM(amount)
-            FILTER (
-              WHERE charge_type = 'water'
-            ),
-          0
-        ) AS water_collected,
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'water'
+        ), 0) AS water_collected,
 
-        COALESCE(
-          SUM(amount)
-            FILTER (
-              WHERE charge_type = 'rent_deposit'
-            ),
-          0
-        ) AS rent_deposits_collected,
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'electricity'
+        ), 0) AS electricity_collected,
 
-        COALESCE(
-          SUM(amount)
-            FILTER (
-              WHERE charge_type = 'water_deposit'
-            ),
-          0
-        ) AS water_deposits_collected
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'service'
+        ), 0) AS service_collected,
+
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type IN ('repair', 'deduction')
+        ), 0) AS repairs_collected,
+
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'rent_deposit'
+        ), 0) AS rent_deposits_collected,
+
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'water_deposit'
+        ), 0) AS water_deposits_collected,
+
+        COALESCE(SUM(amount) FILTER (
+          WHERE charge_type = 'electricity_deposit'
+        ), 0) AS electricity_deposits_collected
       FROM allocations
     `,
     [
@@ -427,13 +485,23 @@ async function get_collection_summary(
 
   const row = result.rows[0];
 
-  return {
-    rent_collected: as_number(
-      row.rent_collected
+  const collection = {
+    rent_collected: as_number(row.rent_collected),
+    water_collected: as_number(row.water_collected),
+
+    electricity_collected: as_number(
+      row.electricity_collected
     ),
 
-    water_collected: as_number(
-      row.water_collected
+    service_collected: as_number(
+      row.service_collected
+    ),
+
+    /*
+      Repairs charged to tenants and move-out deductions.
+    */
+    repairs_collected: as_number(
+      row.repairs_collected
     ),
 
     rent_deposits_collected: as_number(
@@ -443,6 +511,26 @@ async function get_collection_summary(
     water_deposits_collected: as_number(
       row.water_deposits_collected
     ),
+
+    electricity_deposits_collected: as_number(
+      row.electricity_deposits_collected
+    ),
+  };
+
+  return {
+    ...collection,
+
+    deposits_collected:
+      collection.rent_deposits_collected +
+      collection.water_deposits_collected +
+      collection.electricity_deposits_collected,
+
+    total_income:
+      collection.rent_collected +
+      collection.water_collected +
+      collection.electricity_collected +
+      collection.service_collected +
+      collection.repairs_collected,
   };
 }
 
@@ -515,6 +603,7 @@ async function get_water_summary(
 
       WHERE tenant_charges.owner_id = $1
         AND tenant_charges.charge_type = 'water'
+        AND tenant_charges.status <> 'void'
 
         AND tenant_charges.billing_period >= $2
         AND tenant_charges.billing_period <= $3
@@ -645,9 +734,17 @@ async function get_sms_usage(
       FROM sms_messages
 
       WHERE sms_messages.owner_id = $1
+        AND sms_messages.status <> 'cancelled'
 
-        AND sms_messages.created_at::DATE >= $2
-        AND sms_messages.created_at::DATE <= $3
+        AND (
+          sms_messages.created_at
+          AT TIME ZONE 'Africa/Nairobi'
+        )::DATE >= $2
+
+        AND (
+          sms_messages.created_at
+          AT TIME ZONE 'Africa/Nairobi'
+        )::DATE <= $3
 
         AND (
           $4::BIGINT IS NULL
@@ -698,9 +795,206 @@ async function get_sms_usage(
   };
 }
 
+/*
+  The per-tenant lines an exported report lists under its
+  totals. Only loaded for exports.
+*/
+async function get_report_details(
+  client,
+  owner_id,
+  property_id,
+  period
+) {
+  const values = [
+    owner_id,
+    period.start_date,
+    period.end_date,
+    property_id || null,
+  ];
+
+  const rent = await client.query(
+    `
+      SELECT
+        properties.name AS property_name,
+        units.unit_number,
+        tenants.full_name,
+
+        tenants.status IN (
+          'active',
+          'notice_given'
+        ) AS is_current,
+
+        SUM(tenant_charges.amount_due) AS billed,
+        SUM(tenant_charges.amount_paid) AS paid
+
+      FROM tenant_charges
+
+      INNER JOIN tenants
+        ON tenants.id = tenant_charges.tenant_id
+
+      INNER JOIN units
+        ON units.id = tenant_charges.unit_id
+
+      INNER JOIN properties
+        ON properties.id = tenant_charges.property_id
+
+      WHERE tenant_charges.owner_id = $1
+        AND tenant_charges.charge_type = 'rent'
+        AND tenant_charges.status <> 'void'
+        AND tenant_charges.billing_period >= $2
+        AND tenant_charges.billing_period <= $3
+        AND properties.status <> 'archived'
+        AND (
+          $4::BIGINT IS NULL
+          OR tenant_charges.property_id = $4
+        )
+
+      GROUP BY
+        properties.name,
+        units.unit_number,
+        tenants.id,
+        tenants.full_name,
+        tenants.status
+
+      ORDER BY
+        properties.name,
+        units.unit_number,
+        tenants.full_name
+    `,
+    values
+  );
+
+  const water = await client.query(
+    `
+      SELECT
+        properties.name AS property_name,
+        units.unit_number,
+        tenants.full_name,
+
+        TO_CHAR(
+          tenant_charges.billing_period,
+          'Mon YYYY'
+        ) AS month,
+
+        tenant_charges.amount_due AS billed,
+        tenant_charges.amount_paid AS paid
+
+      FROM tenant_charges
+
+      INNER JOIN tenants
+        ON tenants.id = tenant_charges.tenant_id
+
+      INNER JOIN units
+        ON units.id = tenant_charges.unit_id
+
+      INNER JOIN properties
+        ON properties.id = tenant_charges.property_id
+
+      WHERE tenant_charges.owner_id = $1
+        AND tenant_charges.charge_type = 'water'
+        AND tenant_charges.status <> 'void'
+        AND tenant_charges.billing_period >= $2
+        AND tenant_charges.billing_period <= $3
+        AND properties.status <> 'archived'
+        AND (
+          $4::BIGINT IS NULL
+          OR tenant_charges.property_id = $4
+        )
+
+      ORDER BY
+        properties.name,
+        units.unit_number,
+        tenant_charges.billing_period
+    `,
+    values
+  );
+
+  /*
+    Like the arrears totals, this is what is owed today,
+    whatever period was chosen.
+  */
+  const arrears = await client.query(
+    `
+      SELECT
+        properties.name AS property_name,
+        units.unit_number,
+        tenants.full_name,
+
+        tenants.status IN (
+          'active',
+          'notice_given'
+        ) AS is_current,
+
+        SUM(
+          tenant_charges.amount_due -
+          tenant_charges.amount_paid
+        ) AS balance,
+
+        TO_CHAR(
+          MIN(tenant_charges.due_date),
+          'YYYY-MM-DD'
+        ) AS oldest_due_date
+
+      FROM tenant_charges
+
+      INNER JOIN tenants
+        ON tenants.id = tenant_charges.tenant_id
+
+      INNER JOIN units
+        ON units.id = tenant_charges.unit_id
+
+      INNER JOIN properties
+        ON properties.id = tenant_charges.property_id
+
+      WHERE tenant_charges.owner_id = $1
+        AND tenant_charges.status IN (
+          'open',
+          'partial'
+        )
+        AND properties.status <> 'archived'
+        AND (
+          $2::BIGINT IS NULL
+          OR tenant_charges.property_id = $2
+        )
+
+      GROUP BY
+        properties.name,
+        units.unit_number,
+        tenants.id,
+        tenants.full_name,
+        tenants.status
+
+      ORDER BY
+        is_current DESC,
+        balance DESC
+    `,
+    [owner_id, property_id || null]
+  );
+
+  const amounts = (row) => ({
+    ...row,
+    billed: as_number(row.billed),
+    paid: as_number(row.paid),
+  });
+
+  return {
+    rent: rent.rows.map(amounts),
+    water: water.rows.map(amounts),
+
+    arrears: arrears.rows.map((row) => ({
+      ...row,
+      balance: as_number(row.balance),
+    })),
+  };
+}
+
+/*
+  options.details adds the per-tenant lines used by exports.
+*/
 async function get_dashboard_report(
   user,
-  filters
+  filters,
+  options = {}
 ) {
   const client = await db.get_client();
 
@@ -713,71 +1007,99 @@ async function get_dashboard_report(
 
     const period = resolve_period(filters.period);
 
-    const [
-      occupancy,
-      arrears_by_property,
-      collection,
-      water,
-      expenses,
-      sms,
-    ] = await Promise.all([
-      get_occupancy_summary(
-        client,
-        access.owner_id,
-        access.property_id
-      ),
+    let property_name = null;
 
-      get_arrears_by_property(
-        client,
-        access.owner_id,
-        access.property_id
-      ),
+    if (access.property_id) {
+      const property = await client.query(
+        `
+          SELECT name
+          FROM properties
+          WHERE id = $1
+        `,
+        [access.property_id]
+      );
 
-      get_collection_summary(
-        client,
-        access.owner_id,
-        access.property_id,
-        period
-      ),
+      property_name = property.rows[0]?.name || null;
+    }
 
-      get_water_summary(
-        client,
-        access.owner_id,
-        access.property_id,
-        period
-      ),
-
-      get_expense_summary(
-        client,
-        access.owner_id,
-        access.property_id,
-        period
-      ),
-
-      get_sms_usage(
-        client,
-        access.owner_id,
-        access.property_id,
-        period
-      ),
-    ]);
-
-    const total_arrears = arrears_by_property.reduce(
-      (total, item) =>
-        total + item.arrears_amount,
-      0
+    /*
+      One after the other: they share this one connection.
+    */
+    const occupancy = await get_occupancy_summary(
+      client,
+      access.owner_id,
+      access.property_id
     );
+
+    const arrears_by_property =
+      await get_arrears_by_property(
+        client,
+        access.owner_id,
+        access.property_id
+      );
+
+    const collection = await get_collection_summary(
+      client,
+      access.owner_id,
+      access.property_id,
+      period
+    );
+
+    const water = await get_water_summary(
+      client,
+      access.owner_id,
+      access.property_id,
+      period
+    );
+
+    const expenses = await get_expense_summary(
+      client,
+      access.owner_id,
+      access.property_id,
+      period
+    );
+
+    const sms = await get_sms_usage(
+      client,
+      access.owner_id,
+      access.property_id,
+      period
+    );
+
+    const details = options.details
+      ? await get_report_details(
+          client,
+          access.owner_id,
+          access.property_id,
+          period
+        )
+      : undefined;
+
+    const sum = (field) =>
+      arrears_by_property.reduce(
+        (total, item) => total + item[field],
+        0
+      );
 
     return {
       property_id:
         access.property_id || null,
+
+      property_name,
 
       period,
 
       occupancy,
 
       arrears: {
-        total_arrears,
+        /*
+          Owed by tenants living there now, and separately
+          what tenants who moved out still owe.
+        */
+        total_arrears: sum("arrears_amount"),
+        total_former_arrears: sum(
+          "former_tenant_arrears"
+        ),
         by_property: arrears_by_property,
       },
 
@@ -792,12 +1114,13 @@ async function get_dashboard_report(
           Deposits are excluded from operational profit.
         */
         net_operating_income:
-          collection.rent_collected +
-          collection.water_collected -
+          collection.total_income -
           expenses.total_expenses,
       },
 
       sms,
+
+      details,
     };
   } finally {
     client.release();
@@ -872,6 +1195,16 @@ async function get_tenant_statement(
         SELECT
           tenant_charges.*,
 
+          TO_CHAR(
+            tenant_charges.billing_period,
+            'YYYY-MM-DD'
+          ) AS billing_period_text,
+
+          TO_CHAR(
+            tenant_charges.due_date,
+            'YYYY-MM-DD'
+          ) AS due_date_text,
+
           (
             tenant_charges.amount_due -
             tenant_charges.amount_paid
@@ -883,8 +1216,14 @@ async function get_tenant_statement(
 
           AND (
             (
-              tenant_charges.created_at::DATE >= $2
-              AND tenant_charges.created_at::DATE <= $3
+              (
+                tenant_charges.created_at
+                AT TIME ZONE 'Africa/Nairobi'
+              )::DATE >= $2
+              AND (
+                tenant_charges.created_at
+                AT TIME ZONE 'Africa/Nairobi'
+              )::DATE <= $3
             )
 
             OR tenant_charges.status IN (
@@ -908,6 +1247,12 @@ async function get_tenant_statement(
       `
         SELECT
           payments.*,
+
+          TO_CHAR(
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi',
+            'YYYY-MM-DD'
+          ) AS received_on,
 
           COALESCE(
             JSON_AGG(
@@ -944,8 +1289,15 @@ async function get_tenant_statement(
         WHERE payments.tenant_id = $1
           AND payments.status = 'matched'
 
-          AND payments.received_at::DATE >= $2
-          AND payments.received_at::DATE <= $3
+          AND (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE >= $2
+
+          AND (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE <= $3
 
         GROUP BY payments.id
 
@@ -994,6 +1346,33 @@ async function get_tenant_statement(
 
     const balance = balances_result.rows[0];
 
+    /*
+      Present once the tenant has moved out and their deposits
+      were reconciled.
+    */
+    const settlement_result = await client.query(
+      `
+        SELECT
+          deposit_settlements.*,
+
+          TO_CHAR(
+            confirmed_at AT TIME ZONE 'Africa/Nairobi',
+            'YYYY-MM-DD'
+          ) AS confirmed_on,
+
+          TO_CHAR(
+            refund_paid_on,
+            'YYYY-MM-DD'
+          ) AS refund_paid_on_text
+
+        FROM deposit_settlements
+        WHERE tenant_id = $1
+      `,
+      [tenant_id]
+    );
+
+    const settlement = settlement_result.rows[0];
+
     return {
       tenant: {
         id: Number(tenant.id),
@@ -1025,6 +1404,12 @@ async function get_tenant_statement(
         billing_period: charge.billing_period,
         due_date: charge.due_date,
 
+        /*
+          The same two dates as plain 'YYYY-MM-DD' text.
+        */
+        billing_period_text: charge.billing_period_text,
+        due_date_text: charge.due_date_text,
+
         amount_due: as_number(
           charge.amount_due
         ),
@@ -1054,6 +1439,11 @@ async function get_tenant_statement(
 
         received_at: payment.received_at,
 
+        /*
+          The Kenyan day it was received, as 'YYYY-MM-DD'.
+        */
+        received_on: payment.received_on,
+
         applied_to: payment.applied_to || [],
       })),
 
@@ -1064,6 +1454,35 @@ async function get_tenant_statement(
       credit_balance: as_number(
         balance.credit_balance
       ),
+
+      deposit_settlement: settlement
+        ? {
+            deposits_held: as_number(
+              settlement.deposits_held
+            ),
+            credit_held: as_number(
+              settlement.credit_held
+            ),
+            deductions_total: as_number(
+              settlement.deductions_total
+            ),
+            applied_to_bills: as_number(
+              settlement.applied_to_bills
+            ),
+            refund_due: as_number(
+              settlement.refund_due
+            ),
+            tenant_owes: as_number(
+              settlement.tenant_owes
+            ),
+            confirmed_on: settlement.confirmed_on,
+            refund_paid_on:
+              settlement.refund_paid_on_text,
+            refund_method: settlement.refund_method,
+            refund_reference:
+              settlement.refund_reference,
+          }
+        : null,
     };
   } finally {
     client.release();

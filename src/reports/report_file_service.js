@@ -1,5 +1,58 @@
 const PDFDocument = require("pdfkit");
 
+const {
+  send_csv,
+  humanize,
+} = require("../utils/csv");
+
+/*
+  Builds the files for the Reports page: the report export as
+  PDF or CSV, and the tenant statement PDF. The figures come
+  from report_service; nothing is calculated here.
+*/
+
+const report_titles = {
+  full_monthly_summary: "Full summary",
+  rent_collection: "Rent collection",
+  water_billing: "Water billing",
+  occupancy_arrears: "Occupancy and arrears",
+  sms_usage: "SMS usage",
+};
+
+const charge_names = {
+  rent: "Rent",
+  water: "Water",
+  electricity: "Electricity",
+  rent_deposit: "Rent deposit",
+  water_deposit: "Water deposit",
+  electricity_deposit: "Electricity deposit",
+  service: "Service charge",
+  repair: "Repair",
+  deduction: "Deduction",
+};
+
+const method_labels = {
+  mpesa: "M-Pesa",
+  cash: "Cash",
+  bank: "Bank transfer",
+  other: "Other",
+};
+
+const month_names = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
 function format_money(value) {
   return `KES ${Number(value || 0).toLocaleString(
     "en-KE",
@@ -10,19 +63,56 @@ function format_money(value) {
   )}`;
 }
 
-function format_date(value) {
+/*
+  "2026-10-05" -> "5 Oct 2026". Dates arrive as text, so no
+  time zone can move them to the day before.
+*/
+function format_day(value) {
   if (!value) {
     return "-";
   }
 
-  return new Date(value).toLocaleDateString(
+  const [year, month, day] = String(value)
+    .slice(0, 10)
+    .split("-")
+    .map(Number);
+
+  return `${day} ${month_names[month - 1]} ${year}`;
+}
+
+function period_text(period) {
+  return `${format_day(period.start_date)} to ${format_day(
+    period.end_date
+  )}`;
+}
+
+function generated_text() {
+  return `Generated on ${new Date().toLocaleString(
     "en-KE",
-    {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }
-  );
+    { timeZone: "Africa/Nairobi" }
+  )}`;
+}
+
+/*
+  "Rent - Oct 2026", "Garbage - Oct 2026", "Rent deposit".
+  Deposits and one-off charges use the placeholder period
+  1970-01-01 and have no month. billing_period is 'YYYY-MM-DD'.
+*/
+function charge_label(charge) {
+  const name =
+    charge.description ||
+    charge_names[charge.charge_type] ||
+    humanize(charge.charge_type);
+
+  const period = String(charge.billing_period || "");
+
+  if (!period || period.startsWith("1970")) {
+    return name;
+  }
+
+  const [year, month] = period.split("-").map(Number);
+
+  return `${name} - ${month_names[month - 1]} ${year}`;
 }
 
 function safe_filename(value) {
@@ -33,61 +123,261 @@ function safe_filename(value) {
     .slice(0, 80);
 }
 
-function write_key_value(document, label, value) {
-  document
-    .font("Helvetica-Bold")
-    .fontSize(9)
-    .text(`${label}: `, {
-      continued: true,
+function tenant_state(row) {
+  return row.is_current ? "Current" : "Former";
+}
+
+/*
+  What each report type holds. Both the PDF and the CSV are
+  built from this, so they always agree.
+
+  A section is { title, lines, table }:
+    lines  [label, value, is_money]
+    table  { headers, rows, money_columns }
+*/
+function report_sections(report, report_type) {
+  const sections = [];
+  const full = report_type === "full_monthly_summary";
+
+  if (full || report_type === "occupancy_arrears") {
+    sections.push({
+      title: "Occupancy",
+      lines: [
+        ["Total units", report.occupancy.total_units],
+        ["Occupied units", report.occupancy.occupied_units],
+        ["Vacant units", report.occupancy.vacant_units],
+        [
+          "Units under maintenance",
+          report.occupancy.maintenance_units,
+        ],
+        [
+          "Occupancy rate",
+          `${report.occupancy.occupancy_rate}%`,
+        ],
+      ],
     });
 
-  document
-    .font("Helvetica")
-    .fontSize(9)
-    .text(String(value));
+    sections.push({
+      title: "Arrears by property",
+      lines: [
+        [
+          "Owed by current tenants",
+          report.arrears.total_arrears,
+          true,
+        ],
+        [
+          "Owed by former tenants",
+          report.arrears.total_former_arrears,
+          true,
+        ],
+      ],
+      table: {
+        headers: [
+          "Property",
+          "Current tenants owe",
+          "Tenants",
+          "Former tenants owe",
+          "Tenants",
+        ],
+        money_columns: [1, 3],
+        rows: report.arrears.by_property.map((item) => [
+          item.property_name,
+          item.arrears_amount,
+          item.tenants_in_arrears,
+          item.former_tenant_arrears,
+          item.former_tenants_in_arrears,
+        ]),
+      },
+    });
+
+    sections.push({
+      title: "Tenants who owe money",
+      table: {
+        headers: [
+          "Property",
+          "House",
+          "Tenant",
+          "Status",
+          "Owes",
+          "Oldest unpaid bill due",
+        ],
+        money_columns: [4],
+        rows: report.details.arrears.map((row) => [
+          row.property_name,
+          row.unit_number,
+          row.full_name,
+          tenant_state(row),
+          row.balance,
+          format_day(row.oldest_due_date),
+        ]),
+      },
+    });
+  }
+
+  if (full || report_type === "rent_collection") {
+    sections.push({
+      title: "Rent collection",
+      lines: [
+        [
+          "Rent collected",
+          report.collection.rent_collected,
+          true,
+        ],
+        [
+          "Deposits received (held for tenants, not income)",
+          report.collection.deposits_collected,
+          true,
+        ],
+      ],
+      table: {
+        headers: [
+          "Property",
+          "House",
+          "Tenant",
+          "Status",
+          "Rent billed",
+          "Paid",
+          "Still owed",
+        ],
+        money_columns: [4, 5, 6],
+        rows: report.details.rent.map((row) => [
+          row.property_name,
+          row.unit_number,
+          row.full_name,
+          tenant_state(row),
+          row.billed,
+          row.paid,
+          row.billed - row.paid,
+        ]),
+      },
+    });
+  }
+
+  if (full || report_type === "water_billing") {
+    sections.push({
+      title: "Water billing",
+      lines: [
+        ["Water billed", report.water.water_billed, true],
+        [
+          "Water collected",
+          report.collection.water_collected,
+          true,
+        ],
+        [
+          "Water still owed",
+          report.water.water_outstanding,
+          true,
+        ],
+        [
+          "Meter readings submitted",
+          report.water.meter_readings_submitted,
+        ],
+        [
+          "Flagged readings",
+          report.water.flagged_readings,
+        ],
+      ],
+      table: {
+        headers: [
+          "Property",
+          "House",
+          "Tenant",
+          "Month",
+          "Billed",
+          "Paid",
+          "Still owed",
+        ],
+        money_columns: [4, 5, 6],
+        rows: report.details.water.map((row) => [
+          row.property_name,
+          row.unit_number,
+          row.full_name,
+          row.month,
+          row.billed,
+          row.paid,
+          row.billed - row.paid,
+        ]),
+      },
+    });
+  }
+
+  if (full) {
+    sections.push({
+      title: "Income and expenses",
+      lines: [
+        ["Rent", report.collection.rent_collected, true],
+        ["Water", report.collection.water_collected, true],
+        [
+          "Electricity",
+          report.collection.electricity_collected,
+          true,
+        ],
+        [
+          "Service charges",
+          report.collection.service_collected,
+          true,
+        ],
+        [
+          "Repairs and deductions",
+          report.collection.repairs_collected,
+          true,
+        ],
+        [
+          "Total income",
+          report.collection.total_income,
+          true,
+        ],
+        [
+          "Expenses",
+          report.expenses.total_expenses,
+          true,
+        ],
+        [
+          "Net income",
+          report.expenses.net_operating_income,
+          true,
+        ],
+      ],
+    });
+  }
+
+  if (report_type === "sms_usage") {
+    sections.push({
+      title: "SMS usage",
+      lines: [
+        ["Messages", report.sms.total_messages],
+        [
+          "Accepted by the SMS provider",
+          report.sms.accepted_messages,
+        ],
+        ["Failed", report.sms.failed_messages],
+        [
+          "Accepted",
+          `${report.sms.delivery_rate}%`,
+        ],
+        ["Estimated cost", report.sms.sms_cost, true],
+      ],
+    });
+  }
+
+  return sections;
 }
 
-function section_title(document, title) {
-  document.moveDown(1);
-
-  document
-    .font("Helvetica-Bold")
-    .fontSize(12)
-    .fillColor("#1f2937")
-    .text(title);
-
-  document
-    .moveTo(
-      document.x,
-      document.y + 4
-    )
-    .lineTo(
-      document.page.width - document.page.margins.right,
-      document.y + 4
-    )
-    .strokeColor("#d1d5db")
-    .stroke();
-
-  document.moveDown(0.7);
-}
-
-function stream_dashboard_pdf(
-  res,
-  report,
-  report_type
-) {
-  const filename = `${safe_filename(
-    report_type
+function report_filename(report, report_type, extension) {
+  return `${safe_filename(
+    report_titles[report_type]
   )}-${report.period.start_date}-to-${
     report.period.end_date
-  }.pdf`;
+  }.${extension}`;
+}
 
+function start_pdf(res, filename, title) {
   const document = new PDFDocument({
     size: "A4",
     margin: 48,
     info: {
-      Title: "Rental Management Report",
-      Author: "Rental Management System",
+      Title: title,
+      Author: "Kodi",
     },
   });
 
@@ -105,10 +395,175 @@ function stream_dashboard_pdf(
 
   document.pipe(res);
 
+  return document;
+}
+
+function write_key_value(document, label, value) {
+  document.x = document.page.margins.left;
+
+  document
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .fillColor("#111827")
+    .text(`${label}: `, {
+      continued: true,
+    });
+
+  document
+    .font("Helvetica")
+    .fontSize(9)
+    .text(String(value));
+}
+
+function section_title(document, title) {
+  document.x = document.page.margins.left;
+  document.moveDown(1);
+
+  if (
+    document.y >
+    document.page.height -
+      document.page.margins.bottom -
+      60
+  ) {
+    document.addPage();
+  }
+
+  document
+    .font("Helvetica-Bold")
+    .fontSize(12)
+    .fillColor("#1f2937")
+    .text(title);
+
+  document
+    .moveTo(
+      document.page.margins.left,
+      document.y + 4
+    )
+    .lineTo(
+      document.page.width - document.page.margins.right,
+      document.y + 4
+    )
+    .strokeColor("#d1d5db")
+    .stroke();
+
+  document.moveDown(0.7);
+}
+
+/*
+  A plain table that spreads its columns across the page and
+  starts a new page when it runs out of room.
+*/
+function write_table(document, table) {
+  const left = document.page.margins.left;
+
+  const width =
+    (document.page.width -
+      left -
+      document.page.margins.right) /
+    table.headers.length;
+
+  const money_columns = table.money_columns || [];
+
+  function write_row(cells, bold) {
+    if (
+      document.y >
+      document.page.height -
+        document.page.margins.bottom -
+        28
+    ) {
+      document.addPage();
+    }
+
+    const top = document.y;
+    let height = 0;
+
+    document
+      .font(bold ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(8)
+      .fillColor("#111827");
+
+    cells.forEach((cell, index) => {
+      const text = String(
+        cell === null || cell === undefined ? "" : cell
+      );
+
+      const options = {
+        width: width - 6,
+        align:
+          money_columns.includes(index) ? "right" : "left",
+      };
+
+      height = Math.max(
+        height,
+        document.heightOfString(text, options)
+      );
+
+      document.text(
+        text,
+        left + index * width,
+        top,
+        options
+      );
+    });
+
+    document.x = left;
+    document.y = top + height + 4;
+  }
+
+  write_row(table.headers, true);
+
+  if (!table.rows.length) {
+    document
+      .font("Helvetica")
+      .fontSize(8)
+      .fillColor("#6b7280")
+      .text("Nothing to show for this period.", left);
+  }
+
+  table.rows.forEach((row) => {
+    write_row(
+      row.map((cell, index) =>
+        money_columns.includes(index)
+          ? format_money(cell)
+          : cell
+      ),
+      false
+    );
+  });
+
+  document.x = left;
+}
+
+function write_footer(document) {
+  document.x = document.page.margins.left;
+  document.moveDown(2);
+
+  document
+    .font("Helvetica")
+    .fontSize(8)
+    .fillColor("#6b7280")
+    .text(generated_text(), {
+      align: "center",
+    });
+}
+
+function stream_dashboard_pdf(
+  res,
+  report,
+  report_type
+) {
+  const title = `Kodi report - ${report_titles[report_type]}`;
+
+  const document = start_pdf(
+    res,
+    report_filename(report, report_type, "pdf"),
+    title
+  );
+
   document
     .font("Helvetica-Bold")
     .fontSize(18)
-    .text("RENTAL MANAGEMENT REPORT", {
+    .text(title.toUpperCase(), {
       align: "center",
     });
 
@@ -118,231 +573,102 @@ function stream_dashboard_pdf(
     .font("Helvetica")
     .fontSize(9)
     .fillColor("#4b5563")
-    .text(
-      `Period: ${report.period.start_date} to ${report.period.end_date}`,
-      {
-        align: "center",
-      }
-    );
+    .text(`Period: ${period_text(report.period)}`, {
+      align: "center",
+    });
 
   document.text(
-    report.property_id
-      ? `Property ID: ${report.property_id}`
-      : "Scope: All properties",
+    report.property_name
+      ? `Property: ${report.property_name}`
+      : "All properties",
     {
       align: "center",
     }
   );
 
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "occupancy_arrears"
-  ) {
-    section_title(document, "Occupancy");
+  for (const section of report_sections(
+    report,
+    report_type
+  )) {
+    section_title(document, section.title);
 
-    write_key_value(
-      document,
-      "Occupied units",
-      `${report.occupancy.occupied_units} of ${report.occupancy.total_units}`
-    );
-
-    write_key_value(
-      document,
-      "Occupancy rate",
-      `${report.occupancy.occupancy_rate}%`
-    );
-
-    write_key_value(
-      document,
-      "Vacant units",
-      report.occupancy.vacant_units
-    );
-
-    write_key_value(
-      document,
-      "Maintenance units",
-      report.occupancy.maintenance_units
-    );
-
-    section_title(document, "Arrears");
-
-    write_key_value(
-      document,
-      "Total arrears",
-      format_money(report.arrears.total_arrears)
-    );
-
-    report.arrears.by_property.forEach((property) => {
-      document
-        .font("Helvetica")
-        .fontSize(9)
-        .text(
-          `${property.property_name}: ${format_money(
-            property.arrears_amount
-          )} (${property.tenants_in_arrears} tenant(s))`
+    (section.lines || []).forEach(
+      ([label, value, is_money]) => {
+        write_key_value(
+          document,
+          label,
+          is_money ? format_money(value) : value
         );
-    });
-  }
-
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "rent_collection"
-  ) {
-    section_title(document, "Rent Collection");
-
-    write_key_value(
-      document,
-      "Rent collected",
-      format_money(report.collection.rent_collected)
-    );
-
-    write_key_value(
-      document,
-      "Rent deposits collected",
-      format_money(
-        report.collection.rent_deposits_collected
-      )
-    );
-  }
-
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "water_billing"
-  ) {
-    section_title(document, "Water Billing");
-
-    write_key_value(
-      document,
-      "Water billed",
-      format_money(report.water.water_billed)
-    );
-
-    write_key_value(
-      document,
-      "Water collected",
-      format_money(report.water.water_collected)
-    );
-
-    write_key_value(
-      document,
-      "Water outstanding",
-      format_money(report.water.water_outstanding)
-    );
-
-    write_key_value(
-      document,
-      "Meter readings submitted",
-      report.water.meter_readings_submitted
-    );
-
-    write_key_value(
-      document,
-      "Flagged readings",
-      report.water.flagged_readings
-    );
-  }
-
-  if (report_type === "full_monthly_summary") {
-    section_title(document, "Expenses and Operating Position");
-
-    write_key_value(
-      document,
-      "Recorded expenses",
-      format_money(
-        report.expenses.total_expenses
-      )
-    );
-
-    write_key_value(
-      document,
-      "Net operating income",
-      format_money(
-        report.expenses.net_operating_income
-      )
-    );
-  }
-
-  if (report_type === "sms_usage") {
-    section_title(document, "SMS Usage");
-
-    write_key_value(
-      document,
-      "Messages created",
-      report.sms.total_messages
-    );
-
-    write_key_value(
-      document,
-      "Accepted by provider",
-      report.sms.accepted_messages
-    );
-
-    write_key_value(
-      document,
-      "Failed",
-      report.sms.failed_messages
-    );
-
-    write_key_value(
-      document,
-      "Acceptance rate",
-      `${report.sms.delivery_rate}%`
-    );
-
-    write_key_value(
-      document,
-      "Estimated SMS cost",
-      format_money(report.sms.sms_cost)
-    );
-  }
-
-  document.moveDown(2);
-
-  document
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor("#6b7280")
-    .text(
-      `Generated on ${new Date().toLocaleString(
-        "en-KE"
-      )}`,
-      {
-        align: "center",
       }
     );
+
+    if (section.table) {
+      if (section.lines) {
+        document.moveDown(0.6);
+      }
+
+      write_table(document, section.table);
+    }
+  }
+
+  write_footer(document);
 
   document.end();
 }
 
+/*
+  Built with the shared CSV helper, so text a user typed can
+  never run as a spreadsheet formula. Amounts stay as numbers
+  so they can be summed.
+*/
+function stream_dashboard_csv(
+  res,
+  report,
+  report_type
+) {
+  const rows = [
+    ["Period", period_text(report.period)],
+    [
+      "Property",
+      report.property_name || "All properties",
+    ],
+    [],
+  ];
+
+  for (const section of report_sections(
+    report,
+    report_type
+  )) {
+    rows.push([section.title]);
+
+    (section.lines || []).forEach(([label, value]) => {
+      rows.push([label, value]);
+    });
+
+    if (section.table) {
+      rows.push(section.table.headers);
+      rows.push(...section.table.rows);
+    }
+
+    rows.push([]);
+  }
+
+  return send_csv(
+    res,
+    report_filename(report, report_type, "csv"),
+    ["Kodi report", report_titles[report_type]],
+    rows
+  );
+}
+
 function stream_tenant_statement_pdf(res, statement) {
-  const filename = [
-    "tenant-statement",
-    safe_filename(statement.tenant.full_name),
-    statement.tenant.id,
-  ].join("-");
-
-  const document = new PDFDocument({
-    size: "A4",
-    margin: 48,
-    info: {
-      Title: `Tenant Statement - ${statement.tenant.full_name}`,
-      Author: "Rental Management System",
-    },
-  });
-
-  res.status(200);
-
-  res.setHeader(
-    "Content-Type",
-    "application/pdf"
+  const document = start_pdf(
+    res,
+    `tenant-statement-${safe_filename(
+      statement.tenant.full_name
+    )}-${statement.tenant.id}.pdf`,
+    `Tenant statement - ${statement.tenant.full_name}`
   );
-
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${filename}.pdf"`
-  );
-
-  document.pipe(res);
 
   document
     .font("Helvetica-Bold")
@@ -361,293 +687,175 @@ function stream_tenant_statement_pdf(res, statement) {
 
   write_key_value(
     document,
-    "Property / Unit",
+    "Property / house",
     `${statement.tenant.property_name} - ${statement.tenant.unit_number}`
   );
 
   write_key_value(
     document,
     "Period",
-    `${statement.period.start_date} to ${statement.period.end_date}`
+    period_text(statement.period)
   );
 
   write_key_value(
     document,
-    "Outstanding balance",
+    "Balance owed today",
     format_money(statement.outstanding_balance)
   );
 
   write_key_value(
     document,
-    "Available credit",
+    "Credit held",
     format_money(statement.credit_balance)
+  );
+
+  const charges = statement.charges.filter(
+    (charge) => charge.status !== "void"
   );
 
   section_title(document, "Charges");
 
-  if (!statement.charges.length) {
-    document
-      .font("Helvetica")
-      .fontSize(9)
-      .text("No charges found for this statement.");
-  }
-
-  statement.charges.forEach((charge) => {
-    document
-      .font("Helvetica-Bold")
-      .fontSize(9)
-      .text(
-        `${charge.charge_type.replace(/_/g, " ")} - ${format_date(
-          charge.due_date
-        )}`
-      );
-
-    document
-      .font("Helvetica")
-      .fontSize(9)
-      .text(
-        `Due: ${format_money(
-          charge.amount_due
-        )} | Paid: ${format_money(
-          charge.amount_paid
-        )} | Balance: ${format_money(
-          charge.balance
-        )}`
-      );
-
-    document.moveDown(0.35);
+  write_table(document, {
+    headers: [
+      "Charge",
+      "Due",
+      "Amount",
+      "Paid",
+      "Still owed",
+    ],
+    money_columns: [2, 3, 4],
+    rows: [
+      ...charges.map((charge) => [
+        charge_label({
+          ...charge,
+          billing_period: charge.billing_period_text,
+        }),
+        format_day(charge.due_date_text),
+        charge.amount_due,
+        charge.amount_paid,
+        charge.balance,
+      ]),
+      ...(charges.length
+        ? [
+            [
+              "Total",
+              "",
+              charges.reduce(
+                (total, charge) =>
+                  total + charge.amount_due,
+                0
+              ),
+              charges.reduce(
+                (total, charge) =>
+                  total + charge.amount_paid,
+                0
+              ),
+              charges.reduce(
+                (total, charge) =>
+                  total + charge.balance,
+                0
+              ),
+            ],
+          ]
+        : []),
+    ],
   });
 
   section_title(document, "Payments");
 
-  if (!statement.payments.length) {
-    document
-      .font("Helvetica")
-      .fontSize(9)
-      .text("No matched payments found for this period.");
-  }
-
-  statement.payments.forEach((payment) => {
-    document
-      .font("Helvetica-Bold")
-      .fontSize(9)
-      .text(
-        `${format_date(
-          payment.received_at
-        )} - ${format_money(payment.amount)}`
-      );
-
-    document
-      .font("Helvetica")
-      .fontSize(9)
-      .text(
-        `${payment.payment_method} | Ref: ${
-          payment.reference || "-"
-        }`
-      );
-
-    document.moveDown(0.35);
+  write_table(document, {
+    headers: [
+      "Date",
+      "Amount",
+      "Method",
+      "Reference",
+      "Paid for",
+    ],
+    money_columns: [1],
+    rows: statement.payments.map((payment) => [
+      format_day(payment.received_on),
+      payment.amount,
+      method_labels[payment.payment_method] ||
+        payment.payment_method,
+      payment.provider_transaction_id ||
+        payment.reference ||
+        "-",
+      payment.applied_to.length
+        ? payment.applied_to
+            .map((item) => charge_label(item))
+            .join(", ")
+        : "Held as credit",
+    ]),
   });
 
-  document.moveDown(1);
+  const settlement = statement.deposit_settlement;
 
-  document
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor("#6b7280")
-    .text(
-      `Generated on ${new Date().toLocaleString(
-        "en-KE"
-      )}`,
-      {
-        align: "center",
-      }
+  if (settlement) {
+    section_title(document, "Deposit reconciliation");
+
+    write_key_value(
+      document,
+      "Reconciled on",
+      format_day(settlement.confirmed_on)
     );
+
+    write_key_value(
+      document,
+      "Deposits held",
+      format_money(settlement.deposits_held)
+    );
+
+    if (settlement.credit_held > 0) {
+      write_key_value(
+        document,
+        "Credit held",
+        format_money(settlement.credit_held)
+      );
+    }
+
+    write_key_value(
+      document,
+      "Used for unpaid bills and deductions",
+      format_money(settlement.applied_to_bills)
+    );
+
+    if (settlement.tenant_owes > 0) {
+      write_key_value(
+        document,
+        "Still owed by the tenant",
+        format_money(settlement.tenant_owes)
+      );
+    } else {
+      write_key_value(
+        document,
+        "Refund due to the tenant",
+        format_money(settlement.refund_due)
+      );
+
+      if (settlement.refund_due > 0) {
+        write_key_value(
+          document,
+          "Refund",
+          settlement.refund_paid_on
+            ? `Paid on ${format_day(
+                settlement.refund_paid_on
+              )} by ${
+                method_labels[settlement.refund_method] ||
+                settlement.refund_method
+              }${
+                settlement.refund_reference
+                  ? ` (${settlement.refund_reference})`
+                  : ""
+              }`
+            : "Not yet paid"
+        );
+      }
+    }
+  }
+
+  write_footer(document);
 
   document.end();
-}
-
-function escape_csv(value) {
-  const text = String(
-    value === undefined ||
-    value === null
-      ? ""
-      : value
-  );
-
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
-function stream_dashboard_csv(
-  res,
-  report,
-  report_type
-) {
-  const rows = [
-    ["Report type", report_type],
-    [
-      "Period",
-      `${report.period.start_date} to ${report.period.end_date}`,
-    ],
-    [
-      "Property ID",
-      report.property_id || "All properties",
-    ],
-    [],
-  ];
-
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "occupancy_arrears"
-  ) {
-    rows.push(
-      ["Occupancy"],
-      [
-        "Total units",
-        report.occupancy.total_units,
-      ],
-      [
-        "Occupied units",
-        report.occupancy.occupied_units,
-      ],
-      [
-        "Occupancy rate",
-        `${report.occupancy.occupancy_rate}%`,
-      ],
-      [],
-      ["Arrears by property"],
-      [
-        "Property",
-        "Arrears",
-        "Tenants in arrears",
-      ]
-    );
-
-    report.arrears.by_property.forEach((item) => {
-      rows.push([
-        item.property_name,
-        item.arrears_amount,
-        item.tenants_in_arrears,
-      ]);
-    });
-
-    rows.push([]);
-  }
-
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "rent_collection"
-  ) {
-    rows.push(
-      ["Rent Collection"],
-      [
-        "Rent collected",
-        report.collection.rent_collected,
-      ],
-      [
-        "Rent deposits collected",
-        report.collection.rent_deposits_collected,
-      ],
-      []
-    );
-  }
-
-  if (
-    report_type === "full_monthly_summary" ||
-    report_type === "water_billing"
-  ) {
-    rows.push(
-      ["Water Billing"],
-      [
-        "Water billed",
-        report.water.water_billed,
-      ],
-      [
-        "Water collected",
-        report.water.water_collected,
-      ],
-      [
-        "Water outstanding",
-        report.water.water_outstanding,
-      ],
-      [
-        "Meter readings submitted",
-        report.water.meter_readings_submitted,
-      ],
-      [
-        "Flagged readings",
-        report.water.flagged_readings,
-      ],
-      []
-    );
-  }
-
-  if (report_type === "full_monthly_summary") {
-    rows.push(
-      ["Expenses"],
-      [
-        "Total expenses",
-        report.expenses.total_expenses,
-      ],
-      [
-        "Net operating income",
-        report.expenses.net_operating_income,
-      ],
-      []
-    );
-  }
-
-  if (report_type === "sms_usage") {
-    rows.push(
-      ["SMS Usage"],
-      [
-        "Messages created",
-        report.sms.total_messages,
-      ],
-      [
-        "Accepted by provider",
-        report.sms.accepted_messages,
-      ],
-      [
-        "Failed",
-        report.sms.failed_messages,
-      ],
-      [
-        "Acceptance rate",
-        `${report.sms.delivery_rate}%`,
-      ],
-      [
-        "Estimated SMS cost",
-        report.sms.sms_cost,
-      ]
-    );
-  }
-
-  const csv = rows
-    .map((row) =>
-      row.map(escape_csv).join(",")
-    )
-    .join("\r\n");
-
-  const filename = `${safe_filename(
-    report_type
-  )}-${report.period.start_date}-to-${
-    report.period.end_date
-  }.csv`;
-
-  res.status(200);
-
-  res.setHeader(
-    "Content-Type",
-    "text/csv; charset=utf-8"
-  );
-
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${filename}"`
-  );
-
-  return res.send(csv);
 }
 
 module.exports = {

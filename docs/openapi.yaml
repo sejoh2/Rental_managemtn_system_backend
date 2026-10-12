@@ -2278,6 +2278,13 @@ paths:
       tags: [Step 13 - Reports]
       summary: Get dashboard report
       description: |
+        Periods and dates are in Kenyan time. `collection` holds income by
+        kind (rent, water, electricity, service charges, repairs and
+        deductions) with `total_income`, using the same definition as
+        `/api/expenses/summary`; deposits are listed separately and are not
+        income. `arrears` separates what current tenants owe
+        (`total_arrears`) from what former tenants still owe
+        (`total_former_arrears`). Archived properties are left out.
         Owners may request all their properties or one property.
         Caretakers must provide their assigned `property_id`.
       security:
@@ -2297,6 +2304,11 @@ paths:
     get:
       tags: [Step 13 - Reports]
       summary: Export report as PDF or CSV
+      description: |
+        Holds the totals for the chosen type and a line per tenant under
+        them: rent billed and paid per tenant, each water bill, and each
+        tenant who owes money. The export is written to the audit log, and
+        CSV cells that a spreadsheet would read as a formula are neutralised.
       security:
         - bearerAuth: []
       parameters:
@@ -2331,6 +2343,9 @@ paths:
     get:
       tags: [Step 13 - Reports]
       summary: Get tenant statement data
+      description: |
+        Includes `deposit_settlement` once a moved-out tenant's deposits
+        have been reconciled, otherwise null.
       security:
         - bearerAuth: []
       parameters:
@@ -2348,6 +2363,7 @@ paths:
     get:
       tags: [Step 13 - Reports]
       summary: Download tenant statement PDF
+      description: The download is written to the audit log.
       security:
         - bearerAuth: []
       parameters:

@@ -9,6 +9,10 @@ const {
 } = require("./report_file_service");
 
 const {
+  log_audit,
+} = require("../audit/audit_service");
+
+const {
   validate_dashboard_filters,
   validate_export_filters,
   validate_tenant_statement_filters,
@@ -49,8 +53,26 @@ async function export_report(req, res, next) {
     const report =
       await report_service.get_dashboard_report(
         req.user,
-        filters
+        filters,
+        { details: true }
       );
+
+    /*
+      Every export of financial records is written to the
+      audit log.
+    */
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "REPORT_EXPORTED",
+      entity_type: "report",
+      metadata: {
+        type: filters.type,
+        format: filters.format,
+        period: filters.period,
+        property_id: report.property_id,
+      },
+      ip_address: req.ip,
+    });
 
     if (filters.format === "csv") {
       return stream_dashboard_csv(
@@ -122,6 +144,18 @@ async function download_tenant_statement_pdf(
         tenant_id,
         filters
       );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "TENANT_STATEMENT_DOWNLOADED",
+      entity_type: "tenant",
+      entity_id: tenant_id,
+      metadata: {
+        period: filters.period,
+        property_id: statement.tenant.property_id,
+      },
+      ip_address: req.ip,
+    });
 
     return stream_tenant_statement_pdf(
       res,
