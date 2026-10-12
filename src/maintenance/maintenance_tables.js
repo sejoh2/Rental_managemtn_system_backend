@@ -163,6 +163,13 @@ async function init_maintenance_tables() {
       ADD COLUMN IF NOT EXISTS charged_tenant_id BIGINT
       REFERENCES tenants(id)
       ON DELETE SET NULL;
+
+    /*
+      When the tenant was last sent an SMS about the charge.
+      It is sent by hand, never automatically.
+    */
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS charge_sms_sent_at TIMESTAMPTZ;
   `);
 
   console.log("[MAINTENANCE] Tables initialized.");

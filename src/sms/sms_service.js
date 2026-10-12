@@ -24,52 +24,60 @@ function service_error(message, status_code = 400) {
   return error;
 }
 
-function to_date_string(value) {
+const month_names = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/*
+  "2026-10-05" -> "5 Oct 2026".
+  The date arrives as text from SQL, so no time zone can move
+  it to the day before.
+*/
+function format_date(value) {
   if (!value) {
     return "";
   }
 
-  const date = new Date(value);
+  const [year, month, day] = String(value)
+    .split("-")
+    .map(Number);
 
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  return date.toISOString().slice(0, 10);
+  return `${day} ${month_names[month - 1]} ${year}`;
 }
 
-function month_name(value) {
-  const date = value
-    ? new Date(value)
-    : new Date();
-
+function month_name() {
   return new Intl.DateTimeFormat("en-KE", {
     month: "long",
     year: "numeric",
-  }).format(date);
+    timeZone: "Africa/Nairobi",
+  }).format(new Date());
 }
 
-function days_overdue(due_date) {
-  if (!due_date) {
-    return 0;
-  }
-
-  const due = new Date(
-    `${to_date_string(due_date)}T00:00:00`
-  );
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const difference = today.getTime() - due.getTime();
-
-  return difference > 0
-    ? Math.floor(difference / 86400000)
-    : 0;
+/*
+  How many SMS a message is billed as: one up to 160
+  characters, then one per 153.
+*/
+function sms_parts(message) {
+  return message.length <= 160
+    ? 1
+    : Math.ceil(message.length / 153);
 }
 
 function format_money(value) {
-  return as_number(value).toFixed(2);
+  return as_number(value).toLocaleString("en-KE", {
+    maximumFractionDigits: 2,
+  });
 }
 
 function render_message(template, tenant, variables = {}) {
@@ -79,10 +87,8 @@ function render_message(template, tenant, variables = {}) {
     balance: format_money(tenant.balance),
     amount: format_money(tenant.balance),
     month: month_name(),
-    due_date: to_date_string(tenant.next_due_date),
-    days_overdue: String(
-      days_overdue(tenant.next_due_date)
-    ),
+    due_date: format_date(tenant.next_due_date),
+    days_overdue: String(tenant.days_overdue || 0),
     property: tenant.property_name || "",
     ...variables,
   };
@@ -162,7 +168,12 @@ function public_message(message) {
   return {
     id: Number(message.id),
 
-    broadcast_id: Number(message.broadcast_id),
+    /*
+      null for a single message sent outside a broadcast.
+    */
+    broadcast_id: message.broadcast_id
+      ? Number(message.broadcast_id)
+      : null,
 
     property_id: message.property_id
       ? Number(message.property_id)
@@ -219,7 +230,7 @@ async function find_recipients(
 ) {
   const conditions = [
     "tenants.owner_id = $1",
-    "tenants.status = 'active'",
+    "tenants.status IN ('active', 'notice_given')",
     "properties.status = 'active'",
   ];
 
@@ -271,7 +282,8 @@ async function find_recipients(
 
         financials.balance,
         financials.credit_balance,
-        financials.next_due_date
+        financials.next_due_date,
+        financials.days_overdue
 
       FROM tenants
 
@@ -312,14 +324,33 @@ async function find_recipients(
           ) AS credit_balance,
 
           (
-            SELECT MIN(tenant_charges.due_date)
+            SELECT TO_CHAR(
+              MIN(tenant_charges.due_date),
+              'YYYY-MM-DD'
+            )
             FROM tenant_charges
             WHERE tenant_charges.tenant_id = tenants.id
               AND tenant_charges.status IN (
                 'open',
                 'partial'
               )
-          ) AS next_due_date
+          ) AS next_due_date,
+
+          (
+            SELECT GREATEST(
+              (
+                CURRENT_TIMESTAMP
+                AT TIME ZONE 'Africa/Nairobi'
+              )::DATE - MIN(tenant_charges.due_date),
+              0
+            )
+            FROM tenant_charges
+            WHERE tenant_charges.tenant_id = tenants.id
+              AND tenant_charges.status IN (
+                'open',
+                'partial'
+              )
+          ) AS days_overdue
       ) AS financials
 
       WHERE ${conditions.join(" AND ")}
@@ -492,14 +523,72 @@ async function create_template(owner, data) {
   return public_template(result.rows[0]);
 }
 
+const starter_templates = [
+  [
+    "Balance reminder",
+    "Dear {name}, your balance for House {house} is KES {balance}. Kindly pay by {due_date}. {property}",
+  ],
+  [
+    "Late payment warning",
+    "Dear {name}, your payment of KES {balance} for House {house} is {days_overdue} days overdue. Please pay today. {property}",
+  ],
+  [
+    "Water bill reminder",
+    "Dear {name}, your water bill for House {house} is ready. Your total balance is KES {balance}, due {due_date}. {property}",
+  ],
+  [
+    "General notice",
+    "Dear {name}, please note: (write your notice here). {property}",
+  ],
+];
+
+/*
+  Gives an owner the starter templates the first time their
+  templates are listed. It runs once per owner, so a starter
+  template they delete does not come back.
+*/
+async function add_starter_templates(owner_id) {
+  const seed = await db.query(
+    `
+      INSERT INTO sms_template_seeds (owner_id)
+      VALUES ($1)
+      ON CONFLICT (owner_id)
+      DO NOTHING
+      RETURNING owner_id
+    `,
+    [owner_id]
+  );
+
+  if (!seed.rows[0]) {
+    return;
+  }
+
+  for (const [name, body] of starter_templates) {
+    await db.query(
+      `
+        INSERT INTO sms_templates (
+          owner_id,
+          name,
+          body
+        )
+        VALUES ($1, $2, $3)
+        ON CONFLICT (owner_id, name)
+        DO NOTHING
+      `,
+      [owner_id, name, body]
+    );
+  }
+}
+
 async function list_templates(owner) {
+  await add_starter_templates(owner.user_id);
+
   const result = await db.query(
     `
       SELECT *
       FROM sms_templates
       WHERE owner_id = $1
       ORDER BY
-        updated_at DESC,
         name ASC
     `,
     [owner.user_id]
@@ -632,6 +721,80 @@ async function estimate_recipients(owner, target) {
   }
 }
 
+/*
+  Writes one personalised message per recipient, with what
+  each tenant owes at this moment.
+*/
+async function create_messages(
+  client,
+  broadcast,
+  recipients
+) {
+  const cost_per_message = get_sms_cost();
+
+  for (const tenant of recipients) {
+    const message = render_message(
+      broadcast.message_template,
+      tenant,
+      broadcast.variables || {}
+    );
+
+    await client.query(
+      `
+        INSERT INTO sms_messages (
+          broadcast_id,
+          owner_id,
+          property_id,
+          tenant_id,
+          tenant_name,
+          unit_number,
+          recipient_phone,
+          sender_id,
+          template_name,
+          message,
+          estimated_cost,
+          status
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,
+          $6,$7,$8,$9,$10,
+          $11,'queued'
+        )
+      `,
+      [
+        broadcast.id,
+        broadcast.owner_id,
+        tenant.property_id,
+        tenant.id,
+        tenant.full_name,
+        tenant.unit_number,
+        tenant.payment_phone,
+        tenant.sms_sender_id || null,
+        broadcast.template_name || null,
+        message,
+        sms_parts(message) * cost_per_message,
+      ]
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE sms_broadcasts
+      SET messages_created_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+    `,
+    [broadcast.id]
+  );
+}
+
+/*
+  A broadcast sent now gets its messages straight away.
+
+  A scheduled broadcast only stores who it is for. Its
+  recipients and their balances are worked out when it is
+  sent, so a tenant who pays in between is not reminded, and
+  one who falls behind is.
+*/
 async function create_broadcast(owner, data) {
   const client = await db.get_client();
 
@@ -662,19 +825,30 @@ async function create_broadcast(owner, data) {
       );
     }
 
+    send_now = !data.send_at;
+
+    /*
+      A broadcast sent now is stamped with the database's own
+      clock, so it is due at once even if this server's clock
+      runs ahead of the database's.
+    */
     const scheduled_at = data.send_at
       ? new Date(data.send_at)
-      : new Date();
+      : null;
 
+    /*
+      Also checks that the property or tenant belongs to
+      this owner.
+    */
     const recipients = await find_recipients(
       client,
       owner.user_id,
       data
     );
 
-    if (!recipients.length) {
+    if (send_now && !recipients.length) {
       throw service_error(
-        "No active tenants match this recipient selection.",
+        "No tenants match this recipient selection.",
         422
       );
     }
@@ -695,7 +869,12 @@ async function create_broadcast(owner, data) {
         )
         VALUES (
           $1,$2,$3,$4,$5,
-          $6,$7,$8,$9,'scheduled'
+          $6,$7,$8,
+          COALESCE(
+            $9::TIMESTAMPTZ,
+            CURRENT_TIMESTAMP
+          ),
+          'scheduled'
         )
         RETURNING *
       `,
@@ -713,57 +892,18 @@ async function create_broadcast(owner, data) {
     );
 
     const broadcast = broadcast_result.rows[0];
-    const estimated_cost = get_sms_cost();
 
-    for (const tenant of recipients) {
-      const message = render_message(
-        message_template,
-        tenant,
-        data.variables || {}
-      );
-
-      await client.query(
-        `
-          INSERT INTO sms_messages (
-            broadcast_id,
-            owner_id,
-            property_id,
-            tenant_id,
-            tenant_name,
-            unit_number,
-            recipient_phone,
-            sender_id,
-            template_name,
-            message,
-            estimated_cost,
-            status
-          )
-          VALUES (
-            $1,$2,$3,$4,$5,
-            $6,$7,$8,$9,$10,
-            $11,'queued'
-          )
-        `,
-        [
-          broadcast.id,
-          owner.user_id,
-          tenant.property_id,
-          tenant.id,
-          tenant.full_name,
-          tenant.unit_number,
-          tenant.payment_phone,
-          tenant.sms_sender_id || null,
-          template?.name || null,
-          message,
-          estimated_cost,
-        ]
+    if (send_now) {
+      await create_messages(
+        client,
+        broadcast,
+        recipients
       );
     }
 
     await client.query("COMMIT");
 
     broadcast_id = Number(broadcast.id);
-    send_now = !data.send_at;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -801,6 +941,53 @@ async function create_broadcast(owner, data) {
     return public_broadcast(broadcast);
   } finally {
     read_client.release();
+  }
+}
+
+/*
+  Works out a scheduled broadcast's recipients at the moment
+  it is sent. If nobody matches any more, it gets no messages
+  and simply completes.
+*/
+async function prepare_scheduled_messages(broadcast) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    let recipients = [];
+
+    try {
+      recipients = await find_recipients(
+        client,
+        broadcast.owner_id,
+        {
+          recipient_group: broadcast.recipient_group,
+          property_id: broadcast.property_id,
+          tenant_id: broadcast.tenant_id,
+        }
+      );
+    } catch (error) {
+      /*
+        The property or tenant it was for is no longer there.
+      */
+      if (!error.status_code) {
+        throw error;
+      }
+    }
+
+    await create_messages(
+      client,
+      broadcast,
+      recipients
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -847,6 +1034,10 @@ async function dispatch_broadcast(
     throw error;
   } finally {
     client.release();
+  }
+
+  if (!broadcast.messages_created_at) {
+    await prepare_scheduled_messages(broadcast);
   }
 
   const messages = await db.query(
@@ -1117,9 +1308,14 @@ async function get_sms_stats(owner) {
         SELECT *
         FROM sms_messages
         WHERE owner_id = $1
-          AND created_at >= DATE_TRUNC(
-            'month',
-            CURRENT_TIMESTAMP
+          AND status <> 'cancelled'
+          AND created_at >= (
+            DATE_TRUNC(
+              'month',
+              CURRENT_TIMESTAMP
+              AT TIME ZONE 'Africa/Nairobi'
+            )
+            AT TIME ZONE 'Africa/Nairobi'
           )
       )
 
@@ -1150,7 +1346,15 @@ async function get_sms_stats(owner) {
           WHERE owner_id = $1
             AND status = 'scheduled'
             AND scheduled_at > CURRENT_TIMESTAMP
-        ) AS scheduled_count
+        ) AS scheduled_count,
+
+        (
+          SELECT MIN(scheduled_at)
+          FROM sms_broadcasts
+          WHERE owner_id = $1
+            AND status = 'scheduled'
+            AND scheduled_at > CURRENT_TIMESTAMP
+        ) AS next_scheduled_at
       FROM month_messages
     `,
     [owner.user_id]
@@ -1186,11 +1390,19 @@ async function get_sms_stats(owner) {
       row.scheduled_count
     ),
 
+    next_scheduled_at: row.next_scheduled_at,
+
     accepted_cost: as_number(
       row.accepted_cost
     ),
 
     cost_per_message: get_sms_cost(),
+
+    /*
+      'console' means messages are printed in the backend
+      terminal and do not reach any phone.
+    */
+    sms_mode: process.env.SMS_MODE || "console",
   };
 }
 
@@ -1254,6 +1466,114 @@ async function cancel_broadcast(
   }
 }
 
+/*
+  Sends one stored message through the provider and records
+  whether it was accepted.
+*/
+async function deliver_message(message) {
+  try {
+    const result = await send_sms({
+      phone: message.recipient_phone,
+      message: message.message,
+      sender_id: message.sender_id,
+    });
+
+    await db.query(
+      `
+        UPDATE sms_messages
+        SET
+          status = 'accepted',
+          provider = $1,
+          provider_response = $2::JSONB,
+          provider_error = NULL,
+          accepted_at = CURRENT_TIMESTAMP,
+          sent_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+      `,
+      [
+        result.provider,
+        JSON.stringify(result.response || {}),
+        message.id,
+      ]
+    );
+
+    return { status: "accepted", provider_error: null };
+  } catch (error) {
+    const provider_error = String(
+      error.message || "SMS provider failed."
+    ).slice(0, 5000);
+
+    await db.query(
+      `
+        UPDATE sms_messages
+        SET
+          status = 'failed',
+          retry_count = retry_count + 1,
+          provider_error = $1
+        WHERE id = $2
+      `,
+      [provider_error, message.id]
+    );
+
+    return { status: "failed", provider_error };
+  }
+}
+
+/*
+  A single message the system sends to one tenant outside a
+  broadcast, such as a repair charge notice. It is kept in the
+  same history, so the owner can see it and retry it.
+
+  tenant needs id, full_name, unit_number, payment_phone and
+  sms_sender_id. Returns { status, provider_error }; it never
+  throws for a provider failure.
+*/
+async function send_single_sms({
+  owner_id,
+  property_id,
+  tenant,
+  template_name,
+  message,
+}) {
+  const result = await db.query(
+    `
+      INSERT INTO sms_messages (
+        owner_id,
+        property_id,
+        tenant_id,
+        tenant_name,
+        unit_number,
+        recipient_phone,
+        sender_id,
+        template_name,
+        message,
+        estimated_cost,
+        status
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,
+        $6,$7,$8,$9,$10,
+        'queued'
+      )
+      RETURNING *
+    `,
+    [
+      owner_id,
+      property_id,
+      tenant.id,
+      tenant.full_name,
+      tenant.unit_number,
+      tenant.payment_phone,
+      tenant.sms_sender_id || null,
+      template_name,
+      message,
+      sms_parts(message) * get_sms_cost(),
+    ]
+  );
+
+  return deliver_message(result.rows[0]);
+}
+
 async function retry_message(
   owner,
   message_id
@@ -1267,7 +1587,7 @@ async function retry_message(
       WHERE id = $1
         AND owner_id = $2
         AND status = 'failed'
-      RETURNING broadcast_id
+      RETURNING *
     `,
     [
       message_id,
@@ -1275,16 +1595,32 @@ async function retry_message(
     ]
   );
 
-  if (!result.rows[0]) {
+  const message = result.rows[0];
+
+  if (!message) {
     throw service_error(
       "Only a failed SMS message can be retried.",
       400
     );
   }
 
-  const broadcast_id = Number(
-    result.rows[0].broadcast_id
-  );
+  /*
+    A single message is sent again on its own.
+  */
+  if (!message.broadcast_id) {
+    setImmediate(() => {
+      deliver_message(message).catch((error) => {
+        console.error(
+          `[SMS] Retry failed for message ${message_id}:`,
+          error.message
+        );
+      });
+    });
+
+    return;
+  }
+
+  const broadcast_id = Number(message.broadcast_id);
 
   await db.query(
     `
@@ -1328,6 +1664,9 @@ module.exports = {
 
   cancel_broadcast,
   retry_message,
+
+  send_single_sms,
+  dispatch_due_broadcasts,
 
   start_sms_scheduler,
 };

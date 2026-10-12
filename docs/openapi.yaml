@@ -1870,6 +1870,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/maintenance/{request_id}/charge-sms:
+    post:
+      tags: [Step 10 - Maintenance]
+      summary: Send the tenant an SMS about a repair charged to them
+      description: |
+        Owner or assigned caretaker. Sent only on request, never
+        automatically, and may be sent again. Refused (400) if the repair was
+        not charged to a tenant. The message appears in the SMS centre
+        history and `charge_sms_sent_at` is set on the request. Written to
+        the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceRequestId"
+      responses:
+        "200":
+          description: SMS sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "502":
+          description: The SMS provider refused the message
+
   /api/properties/{property_id}/maintenance:
     post:
       tags: [Step 10 - Maintenance]
@@ -2014,6 +2038,12 @@ paths:
     get:
       tags: [Step 12 - SMS Centre]
       summary: Get SMS Centre statistics
+      description: |
+        Counts for the current month in Kenyan time. `accepted` means the
+        SMS provider accepted the message; delivery to the handset is not
+        tracked. `next_scheduled_at` is the next scheduled broadcast, and
+        `sms_mode` is `console` when messages are only printed in the
+        backend terminal and do not reach a phone.
       security:
         - bearerAuth: []
       responses:
@@ -2028,7 +2058,10 @@ paths:
     post:
       tags: [Step 12 - SMS Centre]
       summary: Estimate SMS recipients and cost
-      description: Uses real active tenant balances and tenant credits.
+      description: |
+        Uses real tenant balances and credits. Tenants who are active or have
+        given notice are included. `estimated_cost` assumes one SMS per
+        tenant; a message over 160 characters is billed as more.
       security:
         - bearerAuth: []
       requestBody:
@@ -2049,6 +2082,11 @@ paths:
     get:
       tags: [Step 12 - SMS Centre]
       summary: List saved SMS templates
+      description: |
+        The first time an owner's templates are listed they receive four
+        starter templates, which they may edit or delete.
+        Placeholders: {name}, {house}, {property}, {balance}, {amount},
+        {month}, {due_date} (as 5 Oct 2026) and {days_overdue}.
       security:
         - bearerAuth: []
       responses:
@@ -2144,6 +2182,12 @@ paths:
     post:
       tags: [Step 12 - SMS Centre]
       summary: Create immediate or scheduled broadcast
+      description: |
+        Without `send_at` the messages are written and sent now. With
+        `send_at` only the selection is stored: the recipients and their
+        balances are worked out when the broadcast is sent, so
+        `recipient_count` is 0 until then. If nobody matches at that time
+        the broadcast completes with no messages.
       security:
         - bearerAuth: []
       requestBody:
@@ -2180,6 +2224,9 @@ paths:
     get:
       tags: [Step 12 - SMS Centre]
       summary: List individual SMS message records
+      description: |
+        Includes single messages the system sends outside a broadcast, such
+        as a repair charge notice; those have `broadcast_id: null`.
       security:
         - bearerAuth: []
       parameters:
@@ -3466,8 +3513,10 @@ components:
           description: |
             Owner only. When the request is resolved with an actual cost, the
             cost is always recorded as a property expense. If this is true it
-            is also charged to the tenant living in the unit, who is told by
-            SMS. The cost cannot be changed afterwards.
+            is also charged to the tenant living in the unit. The tenant is
+            not told automatically; send the SMS with
+            POST /api/maintenance/{request_id}/charge-sms.
+            The cost cannot be changed afterwards.
         resolution_notes:
           type: string
           nullable: true

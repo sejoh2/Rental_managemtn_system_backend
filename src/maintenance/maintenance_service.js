@@ -9,8 +9,8 @@ const {
 } = require("../billing/billing_service");
 
 const {
-  send_sms,
-} = require("../utils/sms_provider");
+  send_single_sms,
+} = require("../sms/sms_service");
 
 function public_request(request) {
   return {
@@ -75,6 +75,12 @@ function public_request(request) {
     charged_tenant_id: request.charged_tenant_id
       ? Number(request.charged_tenant_id)
       : null,
+
+    /*
+      When the tenant was last sent an SMS about the charge;
+      null if none was sent.
+    */
+    charge_sms_sent_at: request.charge_sms_sent_at || null,
 
     /*
       The tenant living in the unit now, if any.
@@ -719,9 +725,9 @@ async function record_repair_cost(client, user, request) {
 }
 
 /*
-  Audit entries for a recorded repair cost, and an SMS telling
-  the tenant when the cost was charged to them. Runs after the
-  transaction, so a failed SMS never undoes the charge.
+  Audit entries for a recorded repair cost. The tenant is not
+  told automatically: the SMS about the charge is sent by hand
+  with send_repair_charge_sms.
 */
 async function announce_repair_cost(
   user,
@@ -752,22 +758,6 @@ async function announce_repair_cost(
     return;
   }
 
-  const amount = Number(
-    repair.charge.amount_due
-  ).toLocaleString("en-KE");
-
-  let sms_status = "sent";
-
-  try {
-    await send_sms({
-      phone: repair.tenant.payment_phone,
-      message: `Dear ${repair.tenant.full_name.split(" ")[0]}, a repair at House ${repair.tenant.unit_number} (${request.title}) has been charged to your account: KES ${amount}. Please include it in your next payment. ${repair.tenant.property_name}`,
-      sender_id: repair.tenant.sms_sender_id,
-    });
-  } catch (error) {
-    sms_status = `failed: ${error.message}`;
-  }
-
   await log_audit({
     user_id: user.user_id,
     action: "REPAIR_CHARGED_TO_TENANT",
@@ -778,10 +768,131 @@ async function announce_repair_cost(
       maintenance_request_id: request.id,
       title: request.title,
       amount: repair.charge.amount_due,
-      sms: sms_status,
     },
     ip_address,
   });
+}
+
+/*
+  Sends the tenant an SMS about a repair that was charged to
+  them. It is sent only when the owner or caretaker asks, and
+  may be sent again. The message is kept in the SMS centre
+  history.
+*/
+async function send_repair_charge_sms(
+  user,
+  request_id,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  let request;
+  let tenant;
+  let charge;
+
+  try {
+    request = await get_request_row(
+      client,
+      user,
+      request_id
+    );
+
+    if (
+      !request.tenant_charge_id ||
+      !request.charged_tenant_id
+    ) {
+      const error = new Error(
+        "This repair was not charged to a tenant, so there is nothing to tell them."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    const tenant_result = await client.query(
+      `
+        SELECT
+          tenants.*,
+          units.unit_number,
+          properties.name AS property_name,
+          properties.sms_sender_id
+        FROM tenants
+        INNER JOIN units
+          ON units.id = tenants.unit_id
+        INNER JOIN properties
+          ON properties.id = tenants.property_id
+        WHERE tenants.id = $1
+      `,
+      [request.charged_tenant_id]
+    );
+
+    tenant = tenant_result.rows[0];
+
+    const charge_result = await client.query(
+      `
+        SELECT *
+        FROM tenant_charges
+        WHERE id = $1
+      `,
+      [request.tenant_charge_id]
+    );
+
+    charge = charge_result.rows[0];
+  } finally {
+    client.release();
+  }
+
+  const amount = Number(
+    charge.amount_due
+  ).toLocaleString("en-KE");
+
+  const sms = await send_single_sms({
+    owner_id: request.owner_id,
+    property_id: request.property_id,
+    tenant,
+    template_name: "Repair charge",
+    message: `Dear ${tenant.full_name.split(" ")[0]}, a repair at House ${tenant.unit_number} (${request.title}) has been charged to your account: KES ${amount}. Please include it in your next payment. ${tenant.property_name}`,
+  });
+
+  if (sms.status === "accepted") {
+    await db.query(
+      `
+        UPDATE maintenance_requests
+        SET charge_sms_sent_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `,
+      [request.id]
+    );
+  }
+
+  await log_audit({
+    user_id: user.user_id,
+    action: "REPAIR_CHARGE_SMS_SENT",
+    entity_type: "tenant",
+    entity_id: tenant.id,
+    metadata: {
+      property_id: request.property_id,
+      maintenance_request_id: request.id,
+      title: request.title,
+      amount: charge.amount_due,
+      sms:
+        sms.status === "accepted"
+          ? "sent"
+          : `failed: ${sms.provider_error}`,
+    },
+    ip_address,
+  });
+
+  if (sms.status !== "accepted") {
+    const error = new Error(
+      `The SMS could not be sent: ${sms.provider_error}`
+    );
+
+    error.status_code = 502;
+    throw error;
+  }
+
+  return get_request_by_id(user, request.id);
 }
 
 async function update_request(
@@ -1099,5 +1210,6 @@ module.exports = {
   get_request_by_id,
   list_requests,
   update_request,
+  send_repair_charge_sms,
   get_status_counts,
 };

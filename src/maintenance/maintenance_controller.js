@@ -107,6 +107,29 @@ async function update_request(req, res, next) {
   }
 }
 
+async function send_repair_charge_sms(req, res, next) {
+  try {
+    const request_id = validate_request_id(
+      req.params.request_id
+    );
+
+    const request =
+      await maintenance_service.send_repair_charge_sms(
+        req.user,
+        request_id,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "SMS sent to the tenant.",
+      data: request,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function get_status_counts(req, res, next) {
   try {
     const counts =
@@ -128,5 +151,6 @@ module.exports = {
   list_requests,
   get_request,
   update_request,
+  send_repair_charge_sms,
   get_status_counts,
 };

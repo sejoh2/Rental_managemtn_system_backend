@@ -55,4 +55,13 @@ router.patch(
   maintenance_controller.update_request
 );
 
+/*
+  Sent by hand: nothing tells the tenant automatically.
+*/
+router.post(
+  "/maintenance/:request_id/charge-sms",
+  guard,
+  maintenance_controller.send_repair_charge_sms
+);
+
 module.exports = router;

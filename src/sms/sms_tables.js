@@ -184,6 +184,45 @@ async function init_sms_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    Upgrades. Every statement is safe to run again.
+
+    - A message no longer has to belong to a broadcast, so single
+      messages the system sends (a repair charge notice) are kept
+      in the same history.
+    - A scheduled broadcast's messages are written when it is
+      sent, not when it is scheduled, so balances and recipients
+      are those of the sending day. messages_created_at is set
+      once that has happened.
+    - sms_template_seeds remembers which owners already received
+      the starter templates, so deleted ones do not come back.
+  */
+  await db.query(`
+    ALTER TABLE sms_messages
+      ALTER COLUMN broadcast_id DROP NOT NULL;
+
+    ALTER TABLE sms_broadcasts
+      ADD COLUMN IF NOT EXISTS messages_created_at TIMESTAMPTZ;
+
+    UPDATE sms_broadcasts
+    SET messages_created_at = created_at
+    WHERE messages_created_at IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM sms_messages
+        WHERE sms_messages.broadcast_id = sms_broadcasts.id
+      );
+
+    CREATE TABLE IF NOT EXISTS sms_template_seeds (
+      owner_id BIGINT PRIMARY KEY
+        REFERENCES users(user_id)
+        ON DELETE CASCADE,
+
+      created_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   console.log("[SMS] SMS Centre tables initialized.");
 }
 
