@@ -5,6 +5,7 @@ const caretaker_service = require(
 const {
   validate_assign_caretaker,
   validate_update_caretaker,
+  validate_update_caretaker_details,
   validate_property_id,
   validate_caretaker_id,
 } = require("./caretaker_validator");
@@ -109,7 +110,36 @@ async function update_property_caretaker(
   }
 }
 
+async function update_caretaker(req, res, next) {
+  try {
+    const caretaker_id = validate_caretaker_id(
+      req.params.caretaker_id
+    );
+
+    const data = validate_update_caretaker_details(
+      req.body
+    );
+
+    const caretaker =
+      await caretaker_service.update_caretaker(
+        req.user,
+        caretaker_id,
+        data,
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Caretaker updated successfully.",
+      data: caretaker,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  update_caretaker,
   assign_caretaker,
   list_caretakers,
   get_caretaker,

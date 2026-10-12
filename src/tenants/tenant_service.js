@@ -17,6 +17,40 @@ const {
   adjust_move_out_charges,
 } = require("../billing/billing_service");
 
+const {
+  get_caretaker_property_access,
+} = require("../caretakers/caretaker_access_service");
+
+/*
+  The owner account an action belongs to: the owner's own, or
+  the owner a caretaker works for.
+*/
+function account_owner_id(user) {
+  return user.role === "caretaker"
+    ? Number(user.owner_id)
+    : Number(user.user_id);
+}
+
+/*
+  A caretaker must be assigned to the property: Level 1 to
+  view its tenants, Level 2 to add or edit them. Owners pass.
+*/
+async function ensure_caretaker_access(
+  client,
+  user,
+  property_id,
+  required_level
+) {
+  if (user.role === "caretaker") {
+    await get_caretaker_property_access(
+      client,
+      user,
+      property_id,
+      required_level
+    );
+  }
+}
+
 function public_tenant(tenant) {
   return {
     id: Number(tenant.id),
@@ -240,6 +274,8 @@ async function create_tenant(
   data,
   ip_address
 ) {
+  const owner_id = account_owner_id(owner);
+
   const payment_phone = normalize_payment_phone(
     data.phone
   );
@@ -249,8 +285,15 @@ async function create_tenant(
   try {
     await client.query("BEGIN");
 
+    await ensure_caretaker_access(
+      client,
+      owner,
+      property_id,
+      "level_2"
+    );
+
     await ensure_owner_owns_property(
-      owner.user_id,
+      owner_id,
       property_id,
       client
     );
@@ -273,7 +316,7 @@ async function create_tenant(
       [
         data.unit_id,
         property_id,
-        owner.user_id,
+        owner_id,
       ]
     );
 
@@ -332,7 +375,7 @@ async function create_tenant(
         RETURNING *
       `,
       [
-        owner.user_id,
+        owner_id,
         property_id,
         unit.id,
 
@@ -457,8 +500,17 @@ await client.query("COMMIT");
 }
 
 async function list_property_tenants(owner, property_id) {
+  const owner_id = account_owner_id(owner);
+
+  await ensure_caretaker_access(
+    db,
+    owner,
+    property_id,
+    "level_1"
+  );
+
   await ensure_owner_owns_property(
-    owner.user_id,
+    owner_id,
     property_id
   );
 
@@ -469,7 +521,7 @@ async function list_property_tenants(owner, property_id) {
         AND tenants.property_id = $2
       ${tenant_overview_order}
     `,
-    [owner.user_id, property_id]
+    [owner_id, property_id]
   );
 
   return result.rows.map(public_tenant);
@@ -506,13 +558,15 @@ async function list_tenants(owner, filters) {
 }
 
 async function get_tenant_by_id(owner, tenant_id) {
+  const owner_id = account_owner_id(owner);
+
   const result = await db.query(
     `
       ${tenant_overview_select}
       WHERE tenants.id = $1
         AND tenants.owner_id = $2
     `,
-    [tenant_id, owner.user_id]
+    [tenant_id, owner_id]
   );
 
   if (!result.rows[0]) {
@@ -524,6 +578,13 @@ async function get_tenant_by_id(owner, tenant_id) {
     throw error;
   }
 
+  await ensure_caretaker_access(
+    db,
+    owner,
+    result.rows[0].property_id,
+    "level_1"
+  );
+
   return public_tenant(result.rows[0]);
 }
 
@@ -533,9 +594,18 @@ async function update_tenant(
   data,
   ip_address
 ) {
+  const owner_id = account_owner_id(owner);
+
   const existing = await get_tenant_row_for_owner(
-    owner.user_id,
+    owner_id,
     tenant_id
+  );
+
+  await ensure_caretaker_access(
+    db,
+    owner,
+    existing.property_id,
+    "level_2"
   );
 
   if (

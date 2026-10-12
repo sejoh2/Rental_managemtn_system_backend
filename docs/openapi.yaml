@@ -1923,6 +1923,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+    patch:
+      tags: [Step 11 - Caretakers]
+      summary: Update a caretaker's name, phone number or sign-in status
+      description: |
+        Owner only.
+        `status: suspended` stops the caretaker signing in but keeps their
+        properties; `status: active` lifts it. Changing `phone` changes the
+        number they sign in with and signs them out; it is refused (409) if
+        the number belongs to another user. One caretaker may be assigned to
+        several properties with `POST /api/properties/{property_id}/caretaker`.
+        Written to the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CaretakerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Provide at least one field.
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                phone: { type: string, example: "0733908771" }
+                status:
+                  type: string
+                  enum: [active, suspended]
+      responses:
+        "200":
+          description: Caretaker updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "409":
+          description: The phone number belongs to another user
+
   /api/properties/{property_id}/caretaker:
     post:
       tags: [Step 11 - Caretakers]

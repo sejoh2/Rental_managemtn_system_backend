@@ -802,69 +802,11 @@ async function update_request(
       true
     );
 
-    const is_owner = user.role === "owner";
-
     /*
-      Caretakers can only update requests they reported
-      or requests explicitly assigned to them.
+      A caretaker may do everything the owner can here, for
+      requests in a property they are assigned to. That access
+      was checked when the request was loaded above.
     */
-    if (
-      !is_owner &&
-      Number(existing.reported_by) !==
-        Number(user.user_id) &&
-      Number(existing.assigned_caretaker_id) !==
-        Number(user.user_id)
-    ) {
-      const error = new Error(
-        "You can only update maintenance requests you reported or that are assigned to you."
-      );
-
-      error.status_code = 403;
-      throw error;
-    }
-
-    if (!is_owner) {
-      const forbidden_fields = [
-        "assigned_caretaker_id",
-        "assigned_vendor_name",
-        "estimated_cost",
-        "actual_cost",
-        "charge_to_tenant",
-        "cancellation_reason",
-      ];
-
-      const attempted = forbidden_fields.find(
-        (field) =>
-          Object.prototype.hasOwnProperty.call(
-            data,
-            field
-          )
-      );
-
-      if (attempted) {
-        const error = new Error(
-          "Only the property owner can assign workers, costs, or cancel maintenance requests."
-        );
-
-        error.status_code = 403;
-        throw error;
-      }
-
-      if (
-        data.status &&
-        !["in_progress", "resolved"].includes(
-          data.status
-        )
-      ) {
-        const error = new Error(
-          "Caretakers can only move a request to in progress or resolved."
-        );
-
-        error.status_code = 403;
-        throw error;
-      }
-    }
-
     if (
       data.assigned_caretaker_id !== undefined &&
       data.assigned_caretaker_id !== null

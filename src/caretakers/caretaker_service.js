@@ -181,11 +181,11 @@ async function assign_caretaker(
     /*
       Removing a caretaker from their last property makes the
       account inactive, so the owner must be able to assign
-      that same caretaker again. Suspended accounts stay blocked.
+      that same caretaker again. A caretaker the owner has
+      suspended can be assigned too, and stays suspended.
     */
     const can_be_assigned =
-      user.status === "active" ||
-      (user.status === "inactive" && is_own_caretaker);
+      user.status === "active" || is_own_caretaker;
 
     if (!can_be_assigned) {
       const error = new Error(
@@ -221,8 +221,14 @@ async function assign_caretaker(
           role = 'caretaker',
           owner_id = $3,
           created_by = $3,
-          status = 'active',
-          deactivated_at = NULL
+          status = CASE
+            WHEN status = 'suspended' THEN 'suspended'
+            ELSE 'active'
+          END,
+          deactivated_at = CASE
+            WHEN status = 'suspended' THEN deactivated_at
+            ELSE NULL
+          END
         WHERE user_id = $4
         RETURNING *
       `,
@@ -577,6 +583,7 @@ async function update_property_caretaker(
             status = 'inactive',
             deactivated_at = CURRENT_TIMESTAMP
           WHERE user_id = $1
+            AND status <> 'suspended'
             AND NOT EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
@@ -612,6 +619,7 @@ async function update_property_caretaker(
             status = 'active',
             deactivated_at = NULL
           WHERE user_id = $1
+            AND status <> 'suspended'
         `,
         [caretaker.user_id]
       );
@@ -644,7 +652,169 @@ async function update_property_caretaker(
   }
 }
 
+/*
+  Changes the caretaker's own details, for all their properties:
+  name, phone number and whether they may sign in.
+
+  suspended  the caretaker cannot sign in, but keeps their
+             properties, so they can be reactivated later.
+  active     lifts a suspension.
+
+  The phone number is how a caretaker signs in, so changing it
+  changes what they sign in with. Their history stays with them.
+*/
+async function update_caretaker(
+  owner,
+  caretaker_id,
+  data,
+  ip_address
+) {
+  let phone = null;
+
+  if (data.phone !== undefined) {
+    phone = normalize_phone(data.phone);
+
+    if (!phone) {
+      const error = new Error(
+        "Phone number must be a valid Kenyan mobile number."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+  }
+
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const caretaker = await get_caretaker_row(
+      client,
+      owner.user_id,
+      caretaker_id
+    );
+
+    let status = caretaker.status;
+
+    if (data.status === "suspended") {
+      status = "suspended";
+    }
+
+    if (
+      data.status === "active" &&
+      caretaker.status === "suspended"
+    ) {
+      /*
+        A caretaker with no property left stays unable to
+        sign in until they are assigned to one again.
+      */
+      const assignment_result = await client.query(
+        `
+          SELECT 1
+          FROM property_caretaker_assignments
+          WHERE caretaker_id = $1
+            AND status = 'active'
+          LIMIT 1
+        `,
+        [caretaker.user_id]
+      );
+
+      status = assignment_result.rows[0]
+        ? "active"
+        : "inactive";
+    }
+
+    await client.query(
+      `
+        UPDATE users
+        SET
+          first_name = COALESCE($1, first_name),
+          last_name = COALESCE($2, last_name),
+          phone = COALESCE($3, phone),
+          status = $4::VARCHAR,
+          deactivated_at = CASE
+            WHEN $4::VARCHAR = 'active' THEN NULL
+            ELSE COALESCE(
+              deactivated_at,
+              CURRENT_TIMESTAMP
+            )
+          END
+        WHERE user_id = $5
+      `,
+      [
+        data.first_name || null,
+        data.last_name || null,
+        phone,
+        status,
+        caretaker.user_id,
+      ]
+    );
+
+    /*
+      A suspended caretaker, or one whose number changed, has
+      to sign in again.
+    */
+    if (
+      status === "suspended" ||
+      (phone && phone !== caretaker.phone)
+    ) {
+      await client.query(
+        `
+          UPDATE refresh_tokens
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1
+            AND revoked_at IS NULL
+        `,
+        [caretaker.user_id]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action:
+        status === caretaker.status
+          ? "CARETAKER_DETAILS_UPDATED"
+          : status === "suspended"
+            ? "CARETAKER_SUSPENDED"
+            : "CARETAKER_REACTIVATED",
+      entity_type: "caretaker",
+      entity_id: caretaker.user_id,
+      metadata: {
+        updated_fields: Object.keys(data),
+        previous_phone:
+          phone && phone !== caretaker.phone
+            ? caretaker.phone
+            : undefined,
+        phone: phone || undefined,
+        status,
+      },
+      ip_address,
+    });
+
+    return get_caretaker(owner, caretaker.user_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    if (error.code === "23505") {
+      const duplicate_error = new Error(
+        "This phone number already belongs to another user."
+      );
+
+      duplicate_error.status_code = 409;
+      throw duplicate_error;
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
+  update_caretaker,
   assign_caretaker,
   list_caretakers,
   get_caretaker,

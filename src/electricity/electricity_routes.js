@@ -27,7 +27,7 @@ const router = express.Router();
 */
 const guard = [
   authenticate,
-  require_role("owner"),
+  require_role("owner", "caretaker"),
 ];
 
 router.get(

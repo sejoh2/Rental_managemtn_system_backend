@@ -51,6 +51,38 @@ const update_caretaker_schema = z.object({
   }
 );
 
+/*
+  The caretaker's own details, whichever properties they have.
+*/
+const update_caretaker_details_schema = z.object({
+  first_name: z.string()
+    .trim()
+    .min(2)
+    .max(100)
+    .optional(),
+
+  last_name: z.string()
+    .trim()
+    .min(2)
+    .max(100)
+    .optional(),
+
+  phone: z.string()
+    .trim()
+    .min(1)
+    .optional(),
+
+  status: z.enum([
+    "active",
+    "suspended",
+  ]).optional(),
+}).refine(
+  (data) => Object.keys(data).length > 0,
+  {
+    message: "Provide at least one field to update.",
+  }
+);
+
 function validate(schema, data, message) {
   const result = schema.safeParse(data);
 
@@ -86,6 +118,13 @@ function validate_id(value, label) {
 }
 
 module.exports = {
+  validate_update_caretaker_details: (data) =>
+    validate(
+      update_caretaker_details_schema,
+      data,
+      "Caretaker update data is invalid."
+    ),
+
   validate_assign_caretaker: (data) =>
     validate(
       assign_caretaker_schema,

@@ -36,6 +36,12 @@ router.get(
   caretaker_controller.get_caretaker
 );
 
+router.patch(
+  "/caretakers/:caretaker_id",
+  guard,
+  caretaker_controller.update_caretaker
+);
+
 router.post(
   "/properties/:property_id/caretaker",
   guard,

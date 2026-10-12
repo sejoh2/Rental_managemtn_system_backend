@@ -8,6 +8,10 @@ const {
   apply_tenant_credits,
 } = require("../billing/billing_service");
 
+const {
+  get_caretaker_property_access,
+} = require("../caretakers/caretaker_access_service");
+
 /*
   Electricity for units whose electricity_billing_method is
   'entered': the owner types the amount for each unit every
@@ -23,11 +27,27 @@ function service_error(message, status_code = 400) {
   return error;
 }
 
-async function ensure_owner_owns_property(
+/*
+  The owner of the property, or a caretaker assigned to it.
+*/
+async function ensure_property_access(
   client,
-  owner_id,
+  user,
   property_id
 ) {
+  const owner_id =
+    user.role === "caretaker"
+      ? user.owner_id
+      : user.user_id;
+
+  if (user.role === "caretaker") {
+    await get_caretaker_property_access(
+      client,
+      user,
+      property_id
+    );
+  }
+
   const result = await client.query(
     `
       SELECT
@@ -147,9 +167,9 @@ function public_bill(row) {
 }
 
 async function list_bills(owner, property_id, period) {
-  const property = await ensure_owner_owns_property(
+  const property = await ensure_property_access(
     db,
-    owner.user_id,
+    owner,
     property_id
   );
 
@@ -174,9 +194,9 @@ async function save_bills(
   try {
     await client.query("BEGIN");
 
-    const property = await ensure_owner_owns_property(
+    const property = await ensure_property_access(
       client,
-      owner.user_id,
+      owner,
       property_id
     );
 

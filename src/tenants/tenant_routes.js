@@ -22,15 +22,25 @@ const guard = [
   require_role("owner"),
 ];
 
+/*
+  A caretaker may view the tenants of a property they are
+  assigned to (Level 1) and add or edit them (Level 2).
+  The level is checked in the tenant service.
+*/
+const caretaker_guard = [
+  authenticate,
+  require_role("owner", "caretaker"),
+];
+
 router.get(
   "/properties/:property_id/tenants",
-  guard,
+  caretaker_guard,
   tenant_controller.list_property_tenants
 );
 
 router.post(
   "/properties/:property_id/tenants",
-  guard,
+  caretaker_guard,
   tenant_controller.create_tenant
 );
 
@@ -42,13 +52,13 @@ router.get(
 
 router.get(
   "/tenants/:tenant_id",
-  guard,
+  caretaker_guard,
   tenant_controller.get_tenant
 );
 
 router.patch(
   "/tenants/:tenant_id",
-  guard,
+  caretaker_guard,
   tenant_controller.update_tenant
 );
 
