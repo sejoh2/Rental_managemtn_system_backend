@@ -137,6 +137,29 @@ async function init_unit_tables() {
         electricity_deposit IS NULL
         OR electricity_deposit >= 0
       );
+
+    /*
+      How electricity is billed for the unit.
+      'fixed_monthly' bills electricity_monthly_charge with rent
+      each month (nothing when that amount is empty).
+      'entered' bills the amount the owner types every month.
+    */
+    ALTER TABLE units
+      ADD COLUMN IF NOT EXISTS electricity_billing_method
+      VARCHAR(30) NOT NULL DEFAULT 'fixed_monthly';
+
+    ALTER TABLE units
+      DROP CONSTRAINT IF EXISTS
+      units_electricity_billing_method_check;
+
+    ALTER TABLE units
+      ADD CONSTRAINT units_electricity_billing_method_check
+      CHECK (
+        electricity_billing_method IN (
+          'fixed_monthly',
+          'entered'
+        )
+      );
   `);
 
   console.log("[UNITS] Units table initialized.");

@@ -21,7 +21,11 @@ const config = process.env.DATABASE_URL
 
 const pool = new Pool({
   ...config,
-  max: 20,
+  /*
+    Hosted databases allow a small number of connections
+    (15 on the current plan), shared with restarts and tools.
+  */
+  max: Number(process.env.DB_POOL_MAX) || 8,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });

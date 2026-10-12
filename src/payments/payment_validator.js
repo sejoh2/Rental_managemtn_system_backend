@@ -28,6 +28,7 @@ const manual_payment_schema = z.object({
     "rent",
     "water",
     "electricity",
+    "service",
   ]).default("rent"),
 
   received_at: z.string()
@@ -44,6 +45,27 @@ const manual_payment_schema = z.object({
     .trim()
     .max(5000)
     .nullable()
+    .optional(),
+});
+
+const export_payments_schema = z.object({
+  property_id: z.coerce.number()
+    .int()
+    .positive()
+    .optional(),
+
+  status: z.enum([
+    "matched",
+    "unmatched",
+    "reversed",
+  ]).optional(),
+
+  from_date: z.string()
+    .date()
+    .optional(),
+
+  to_date: z.string()
+    .date()
     .optional(),
 });
 
@@ -109,6 +131,9 @@ function validate_id(value, label) {
 module.exports = {
   validate_match_payment: (data) =>
     validate(match_payment_schema, data),
+
+  validate_export_payments: (data) =>
+    validate(export_payments_schema, data),
 
   validate_reverse_payment: (data) =>
     validate(reverse_payment_schema, data),

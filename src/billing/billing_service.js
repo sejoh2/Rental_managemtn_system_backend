@@ -9,7 +9,9 @@ const {
 
   Monthly charges are rent, the unit's fixed electricity amount,
   and the unit's fixed water amount. Metered water is billed by
-  the Water module when a meter reading is submitted.
+  the Water module when a meter reading is submitted, and
+  electricity the owner enters by hand each month is billed by
+  the Electricity module.
 
   - On the 1st of each month (Nairobi time) every active or
     notice-given tenant is billed for that month.
@@ -17,8 +19,13 @@ const {
     never back-billed.
   - The move-in month and the move-out month follow the
     property's move_in_billing and move_out_billing settings.
-  - A tenant can have only one charge of each type per month,
-    so every function here is safe to run more than once.
+  - Service charges the property passes on to tenants are
+    billed the same way: monthly ones with rent, and for a
+    part month under the same move-in and move-out rules.
+    One-off ones are billed once, in full.
+  - A tenant can have only one charge of each type per month
+    (one per service charge), so every function here is safe
+    to run more than once.
 */
 
 const BILLING_TIME_ZONE = "Africa/Nairobi";
@@ -30,6 +37,9 @@ const BILLING_TIME_ZONE = "Africa/Nairobi";
   Electricity and water money, including their deposits, goes
   to its own account when the property has one. Otherwise those
   charges are settled through the rent account.
+
+  Service charges and repairs are settled last, through the
+  account the owner chose for them on the property.
 */
 const charge_priority_order_sql = `
   CASE charge_type
@@ -39,6 +49,9 @@ const charge_priority_order_sql = `
     WHEN 'rent' THEN 4
     WHEN 'electricity' THEN 5
     WHEN 'water' THEN 6
+    WHEN 'service' THEN 7
+    WHEN 'repair' THEN 8
+    WHEN 'deduction' THEN 9
     ELSE 99
   END
 `;
@@ -48,42 +61,90 @@ async function get_payable_charge_types(
   property_id,
   account_for
 ) {
-  if (account_for === "water") {
-    return ["water_deposit", "water"];
-  }
-
-  if (account_for === "electricity") {
-    return ["electricity_deposit", "electricity"];
-  }
-
   const result = await client.query(
     `
-      SELECT account_for
-      FROM payment_accounts
-      WHERE property_id = $1
-        AND status = 'active'
+      SELECT
+        properties.service_charge_account,
+
+        COALESCE(
+          ARRAY_AGG(payment_accounts.account_for)
+            FILTER (
+              WHERE payment_accounts.id IS NOT NULL
+            ),
+          '{}'
+        ) AS accounts
+
+      FROM properties
+
+      LEFT JOIN payment_accounts
+        ON payment_accounts.property_id = properties.id
+        AND payment_accounts.status = 'active'
+
+      WHERE properties.id = $1
+
+      GROUP BY properties.id
     `,
     [property_id]
   );
 
-  const accounts = result.rows.map(
-    (row) => row.account_for
-  );
+  const accounts = result.rows[0]?.accounts || [];
 
-  const charge_types = [
-    "rent_deposit",
-    "rent",
-  ];
+  /*
+    The account service charges and repairs are paid into.
+    It falls back to rent if that account is no longer there.
+  */
+  let service_account =
+    result.rows[0]?.service_charge_account || "rent";
 
-  if (!accounts.includes("electricity")) {
+  if (!accounts.includes(service_account)) {
+    service_account = "rent";
+  }
+
+  const paid_into = [
+    "water",
+    "electricity",
+    "service",
+  ].includes(account_for)
+    ? account_for
+    : "rent";
+
+  const charge_types = [];
+
+  if (paid_into === "water") {
+    charge_types.push("water_deposit", "water");
+  }
+
+  if (paid_into === "electricity") {
     charge_types.push(
       "electricity_deposit",
       "electricity"
     );
   }
 
-  if (!accounts.includes("water")) {
-    charge_types.push("water_deposit", "water");
+  if (paid_into === "rent") {
+    charge_types.push("rent_deposit", "rent");
+
+    if (!accounts.includes("electricity")) {
+      charge_types.push(
+        "electricity_deposit",
+        "electricity"
+      );
+    }
+
+    if (!accounts.includes("water")) {
+      charge_types.push("water_deposit", "water");
+    }
+  }
+
+  /*
+    Money recorded by hand as "service charges" always
+    settles them, whichever account the property uses.
+  */
+  if (
+    paid_into === "service" ||
+    paid_into === service_account
+  ) {
+    charge_types.push("service", "repair", "deduction");
   }
 
   return charge_types;
@@ -259,6 +320,189 @@ async function apply_tenant_credits(client, tenant_id) {
 }
 
 /*
+  The share of a monthly amount billed for a month that starts
+  part-way through, on the given date. It follows the
+  property's move_in_billing rule, so the query must join
+  properties.
+*/
+function part_month_fraction_sql(date_sql) {
+  return `
+    CASE
+      WHEN EXTRACT(DAY FROM ${date_sql}) = 1
+        THEN 1::NUMERIC
+
+      WHEN properties.move_in_billing = 'full_month'
+        THEN 1::NUMERIC
+
+      WHEN properties.move_in_billing =
+        'free_until_next_month'
+        THEN 0::NUMERIC
+
+      ELSE (
+        EXTRACT(
+          DAY FROM (
+            DATE_TRUNC('month', ${date_sql}) +
+            INTERVAL '1 month - 1 day'
+          )
+        ) -
+        EXTRACT(DAY FROM ${date_sql})
+      )::NUMERIC /
+      EXTRACT(
+        DAY FROM (
+          DATE_TRUNC('month', ${date_sql}) +
+          INTERVAL '1 month - 1 day'
+        )
+      )::NUMERIC
+    END
+  `;
+}
+
+/*
+  Bills service charges from the day they start to apply:
+  the later of the tenant's move-in date and the day the
+  charge was added.
+
+  Pass tenant_id for a new tenant (all the property's charges),
+  or service_charge_id for a new charge (all current tenants).
+
+  monthly  the rest of that month, under the property's
+           move-in billing rule. Later months come from the
+           monthly billing run.
+  once     the full amount, a single time per tenant.
+*/
+async function bill_service_charges(
+  client,
+  { tenant_id = null, service_charge_id = null }
+) {
+  const result = await client.query(
+    `
+      WITH billable AS (
+        SELECT
+          tenants.id AS tenant_id,
+          tenants.owner_id,
+          tenants.property_id,
+          tenants.unit_id,
+
+          service_charges.id AS service_charge_id,
+          service_charges.name,
+          service_charges.frequency,
+
+          COALESCE(
+            service_charge_units.amount,
+            service_charges.amount
+          ) AS amount,
+
+          GREATEST(
+            tenants.move_in_date,
+            service_charges.start_date
+          ) AS effective_date,
+
+          ${part_month_fraction_sql(`
+            GREATEST(
+              tenants.move_in_date,
+              service_charges.start_date
+            )
+          `)} AS fraction
+
+        FROM tenants
+
+        INNER JOIN properties
+          ON properties.id = tenants.property_id
+
+        INNER JOIN service_charges
+          ON service_charges.property_id =
+            tenants.property_id
+          AND service_charges.status = 'active'
+
+        LEFT JOIN service_charge_units
+          ON service_charge_units.service_charge_id =
+            service_charges.id
+          AND service_charge_units.unit_id =
+            tenants.unit_id
+
+        WHERE tenants.status IN (
+            'active',
+            'notice_given'
+          )
+          AND properties.status = 'active'
+
+          AND (
+            $1::BIGINT IS NULL
+            OR tenants.id = $1
+          )
+
+          AND (
+            $2::BIGINT IS NULL
+            OR service_charges.id = $2
+          )
+      ),
+
+      amounts AS (
+        SELECT
+          billable.*,
+
+          CASE
+            WHEN billable.frequency = 'once'
+              THEN DATE '1970-01-01'
+            ELSE DATE_TRUNC(
+              'month',
+              billable.effective_date
+            )::DATE
+          END AS billing_period,
+
+          ROUND(
+            billable.amount *
+            CASE
+              WHEN billable.frequency = 'once'
+                THEN 1
+              ELSE billable.fraction
+            END
+          ) AS amount_due
+
+        FROM billable
+      )
+
+      INSERT INTO tenant_charges (
+        tenant_id,
+        owner_id,
+        property_id,
+        unit_id,
+        charge_type,
+        billing_period,
+        due_date,
+        amount_due,
+        description,
+        source_id
+      )
+      SELECT
+        tenant_id,
+        owner_id,
+        property_id,
+        unit_id,
+        'service',
+        billing_period,
+        effective_date,
+        amount_due,
+        name,
+        service_charge_id
+      FROM amounts
+      WHERE amount_due > 0
+      ON CONFLICT (
+        tenant_id,
+        charge_type,
+        billing_period,
+        source_id
+      )
+      DO NOTHING
+      RETURNING *
+    `,
+    [tenant_id, service_charge_id]
+  );
+
+  return result.rows;
+}
+
+/*
   Bills a new tenant for their move-in month.
 
   prorated               rent x (days in month - move-in day)
@@ -281,7 +525,11 @@ async function create_move_in_charges(client, tenant_id) {
           tenants.move_in_date,
           tenants.monthly_rent,
 
-          units.electricity_monthly_charge,
+          CASE
+            WHEN units.electricity_billing_method = 'entered'
+            THEN 0
+            ELSE units.electricity_monthly_charge
+          END AS electricity_monthly_charge,
           units.water_billing_method,
           units.water_fixed_monthly_bill,
 
@@ -364,7 +612,8 @@ async function create_move_in_charges(client, tenant_id) {
       ON CONFLICT (
         tenant_id,
         charge_type,
-        billing_period
+        billing_period,
+        source_id
       )
       DO NOTHING
       RETURNING *
@@ -406,7 +655,8 @@ async function create_move_in_charges(client, tenant_id) {
       ON CONFLICT (
         tenant_id,
         charge_type,
-        billing_period
+        billing_period,
+        source_id
       )
       DO NOTHING
       RETURNING *
@@ -414,9 +664,15 @@ async function create_move_in_charges(client, tenant_id) {
     [tenant_id]
   );
 
+  const service_charges = await bill_service_charges(
+    client,
+    { tenant_id }
+  );
+
   return [
     ...deposit_result.rows,
     ...result.rows,
+    ...service_charges,
   ];
 }
 
@@ -448,7 +704,11 @@ async function run_monthly_billing() {
             tenants.unit_id,
             tenants.monthly_rent,
 
-            units.electricity_monthly_charge,
+            CASE
+              WHEN units.electricity_billing_method = 'entered'
+              THEN 0
+              ELSE units.electricity_monthly_charge
+            END AS electricity_monthly_charge,
             units.water_billing_method,
             units.water_fixed_monthly_bill,
 
@@ -508,7 +768,8 @@ async function run_monthly_billing() {
         ON CONFLICT (
           tenant_id,
           charge_type,
-          billing_period
+          billing_period,
+          source_id
         )
         DO NOTHING
         RETURNING
@@ -524,9 +785,111 @@ async function run_monthly_billing() {
       [BILLING_TIME_ZONE]
     );
 
+    /*
+      Monthly service charges, for charges added before this
+      month. The month a charge is added in was already billed
+      when it was added.
+    */
+    const service_result = await client.query(
+      `
+        WITH period AS (
+          SELECT DATE_TRUNC(
+            'month',
+            CURRENT_TIMESTAMP AT TIME ZONE $1
+          )::DATE AS billing_period
+        )
+
+        INSERT INTO tenant_charges (
+          tenant_id,
+          owner_id,
+          property_id,
+          unit_id,
+          charge_type,
+          billing_period,
+          due_date,
+          amount_due,
+          description,
+          source_id
+        )
+        SELECT
+          tenants.id,
+          tenants.owner_id,
+          tenants.property_id,
+          tenants.unit_id,
+          'service',
+          period.billing_period,
+          (
+            period.billing_period +
+            (properties.rent_due_day - 1)
+          )::DATE,
+          COALESCE(
+            service_charge_units.amount,
+            service_charges.amount
+          ),
+          service_charges.name,
+          service_charges.id
+
+        FROM tenants
+
+        INNER JOIN properties
+          ON properties.id = tenants.property_id
+
+        INNER JOIN service_charges
+          ON service_charges.property_id =
+            tenants.property_id
+          AND service_charges.status = 'active'
+          AND service_charges.frequency = 'monthly'
+
+        LEFT JOIN service_charge_units
+          ON service_charge_units.service_charge_id =
+            service_charges.id
+          AND service_charge_units.unit_id =
+            tenants.unit_id
+
+        CROSS JOIN period
+
+        WHERE tenants.status IN (
+            'active',
+            'notice_given'
+          )
+          AND properties.status = 'active'
+          AND tenants.move_in_date <
+            period.billing_period
+          AND service_charges.start_date <
+            period.billing_period
+          AND COALESCE(
+            service_charge_units.amount,
+            service_charges.amount
+          ) > 0
+
+        ON CONFLICT (
+          tenant_id,
+          charge_type,
+          billing_period,
+          source_id
+        )
+        DO NOTHING
+        RETURNING
+          tenant_id,
+          owner_id,
+          charge_type,
+          amount_due,
+          TO_CHAR(
+            billing_period,
+            'YYYY-MM-DD'
+          ) AS billing_period
+      `,
+      [BILLING_TIME_ZONE]
+    );
+
+    const billed_rows = [
+      ...result.rows,
+      ...service_result.rows,
+    ];
+
     const tenant_ids = [
       ...new Set(
-        result.rows.map((row) => row.tenant_id)
+        billed_rows.map((row) => row.tenant_id)
       ),
     ];
 
@@ -543,10 +906,10 @@ async function run_monthly_billing() {
 
     const summary = {
       billing_period:
-        result.rows[0]?.billing_period || null,
-      charges_created: result.rows.length,
+        billed_rows[0]?.billing_period || null,
+      charges_created: billed_rows.length,
       tenants_billed: tenant_ids.length,
-      total_billed: result.rows.reduce(
+      total_billed: billed_rows.reduce(
         (total, row) =>
           total + Number(row.amount_due),
         0
@@ -558,11 +921,11 @@ async function run_monthly_billing() {
       One audit entry per owner account that was billed.
     */
     const owner_ids = [
-      ...new Set(result.rows.map((row) => row.owner_id)),
+      ...new Set(billed_rows.map((row) => row.owner_id)),
     ];
 
     for (const owner_id of owner_ids) {
-      const owner_rows = result.rows.filter(
+      const owner_rows = billed_rows.filter(
         (row) => row.owner_id === owner_id
       );
 
@@ -686,6 +1049,8 @@ async function release_charge_payments(
     amount x move-out day / days in month.
     If the tenant also moved in that same month on a pro-rated
     basis, only the days between the two dates are billed.
+  - Monthly service charges follow the same rules.
+    One-off charges are not changed.
   - Anything already paid above the reduced amount becomes
     tenant credit.
 
@@ -703,7 +1068,11 @@ async function adjust_move_out_charges(
         properties.move_in_billing,
         properties.move_out_billing,
 
-        units.electricity_monthly_charge,
+        CASE
+          WHEN units.electricity_billing_method = 'entered'
+          THEN 0
+          ELSE units.electricity_monthly_charge
+        END AS electricity_monthly_charge,
         units.water_billing_method,
         units.water_fixed_monthly_bill,
 
@@ -748,10 +1117,17 @@ async function adjust_move_out_charges(
 
   const monthly_amounts = {
     rent: Number(context.monthly_rent),
-    electricity: Number(
-      context.electricity_monthly_charge || 0
-    ),
   };
+
+  /*
+    Electricity the owner enters by hand is what was actually
+    used, so it is never reduced or cancelled here.
+  */
+  if (Number(context.electricity_monthly_charge) > 0) {
+    monthly_amounts.electricity = Number(
+      context.electricity_monthly_charge
+    );
+  }
 
   if (context.water_billing_method === "fixed_monthly") {
     monthly_amounts.water = Number(
@@ -781,14 +1157,41 @@ async function adjust_move_out_charges(
         tenant_charges.*,
         (
           tenant_charges.billing_period > $3::DATE
-        ) AS is_after_move_out
+        ) AS is_after_move_out,
+
+        /*
+          Set when the service charge was added part-way
+          through the move-out month.
+        */
+        CASE
+          WHEN DATE_TRUNC(
+            'month',
+            service_charges.start_date
+          )::DATE = $3::DATE
+          AND EXTRACT(
+            DAY FROM service_charges.start_date
+          ) <> 1
+          THEN EXTRACT(
+            DAY FROM service_charges.start_date
+          )::INTEGER
+          ELSE 0
+        END AS service_start_day
+
       FROM tenant_charges
-      WHERE tenant_id = $1
-        AND charge_type = ANY($2)
-        AND billing_period >= $3::DATE
-        AND status <> 'void'
-      ORDER BY id
-      FOR UPDATE
+
+      LEFT JOIN service_charges
+        ON tenant_charges.charge_type = 'service'
+        AND service_charges.id = tenant_charges.source_id
+
+      WHERE tenant_charges.tenant_id = $1
+        AND (
+          tenant_charges.charge_type = ANY($2)
+          OR tenant_charges.charge_type = 'service'
+        )
+        AND tenant_charges.billing_period >= $3::DATE
+        AND tenant_charges.status <> 'void'
+      ORDER BY tenant_charges.id
+      FOR UPDATE OF tenant_charges
     `,
     [
       tenant_id,
@@ -807,6 +1210,40 @@ async function adjust_move_out_charges(
 
     if (charge.is_after_move_out) {
       target_amount = 0;
+    } else if (
+      prorate_move_out_month &&
+      charge.charge_type === "service"
+    ) {
+      /*
+        A service charge is reduced in proportion to the days
+        it was billed for. That is the whole month, unless the
+        tenant moved in or the charge was added part-way
+        through it on a pro-rated basis.
+      */
+      const first_service_day =
+        context.move_in_billing === "prorated"
+          ? Math.max(
+              first_billed_day,
+              charge.service_start_day
+            )
+          : 0;
+
+      const billed_days =
+        context.days_in_month - first_service_day;
+
+      const kept_days = Math.max(
+        context.move_out_day - first_service_day,
+        0
+      );
+
+      if (billed_days > 0) {
+        target_amount = Math.min(
+          Math.round(
+            (amount_due * kept_days) / billed_days
+          ),
+          amount_due
+        );
+      }
     } else if (prorate_move_out_month) {
       target_amount = Math.min(
         Math.round(
@@ -864,6 +1301,7 @@ async function adjust_move_out_charges(
 
     adjustments.push({
       charge_type: charge.charge_type,
+      description: charge.description,
       previous_amount: amount_due,
       amount: target_amount,
       credited_to_tenant: amount_paid - new_amount_paid,
@@ -925,6 +1363,7 @@ module.exports = {
   charge_priority_order_sql,
   get_payable_charge_types,
   apply_tenant_credits,
+  bill_service_charges,
   create_move_in_charges,
   run_monthly_billing,
   adjust_move_out_charges,

@@ -79,6 +79,13 @@ const update_request_schema = z.object({
     .nullable()
     .optional(),
 
+  /*
+    Owner only. Charges the actual cost to the tenant living
+    in the unit when the request is resolved.
+  */
+  charge_to_tenant: z.boolean()
+    .optional(),
+
   resolution_notes: z.string()
     .trim()
     .max(10000)

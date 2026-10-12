@@ -114,7 +114,7 @@ async function init_property_tables() {
         ON DELETE CASCADE,
 
       account_for VARCHAR(30) NOT NULL
-        CHECK (account_for IN ('rent', 'water', 'electricity')),
+        CHECK (account_for IN ('rent', 'water', 'electricity', 'service')),
 
       provider_code VARCHAR(30) NOT NULL
         CHECK (provider_code = 'mpesa'),
@@ -198,7 +198,7 @@ async function init_property_tables() {
         ON DELETE CASCADE,
 
       account_for VARCHAR(30) NOT NULL
-        CHECK (account_for IN ('rent', 'water', 'electricity')),
+        CHECK (account_for IN ('rent', 'water', 'electricity', 'service')),
 
       provider_code VARCHAR(30) NOT NULL
         CHECK (provider_code = 'mpesa'),
@@ -283,7 +283,8 @@ async function init_property_tables() {
 
   /*
     Upgrades for databases created before monthly billing,
-    numeric rent due days, and electricity accounts existed.
+    numeric rent due days, electricity accounts, and service
+    charge accounts existed.
     Every statement is safe to run again.
   */
   await db.query(`
@@ -365,14 +366,38 @@ async function init_property_tables() {
 
     ALTER TABLE payment_accounts
       ADD CONSTRAINT payment_accounts_account_for_check
-      CHECK (account_for IN ('rent', 'water', 'electricity'));
+      CHECK (account_for IN ('rent', 'water', 'electricity', 'service'));
 
     ALTER TABLE property_connection_checks
       DROP CONSTRAINT IF EXISTS property_connection_checks_account_for_check;
 
     ALTER TABLE property_connection_checks
       ADD CONSTRAINT property_connection_checks_account_for_check
-      CHECK (account_for IN ('rent', 'water', 'electricity'));
+      CHECK (account_for IN ('rent', 'water', 'electricity', 'service'));
+
+    /*
+      The account tenants pay service charges and repairs into:
+      the rent, water or electricity account, or a separate
+      'service' account of their own.
+    */
+    ALTER TABLE properties
+      ADD COLUMN IF NOT EXISTS service_charge_account VARCHAR(30)
+      NOT NULL DEFAULT 'rent';
+
+    ALTER TABLE properties
+      DROP CONSTRAINT IF EXISTS
+      properties_service_charge_account_check;
+
+    ALTER TABLE properties
+      ADD CONSTRAINT properties_service_charge_account_check
+      CHECK (
+        service_charge_account IN (
+          'rent',
+          'water',
+          'electricity',
+          'service'
+        )
+      );
   `);
 
   console.log("[PROPERTIES] Tables initialized.");

@@ -76,6 +76,15 @@ const create_unit_schema = z.object({
     .optional(),
 
   /*
+    'fixed_monthly' bills the amount above with rent.
+    'entered' bills the amount the owner types each month.
+  */
+  electricity_billing_method: z.enum([
+    "fixed_monthly",
+    "entered",
+  ]).optional(),
+
+  /*
     Optional one-off deposit charged in full at move-in.
   */
   electricity_deposit: z.coerce.number()
@@ -178,6 +187,15 @@ const update_unit_schema = z.object({
     .min(0)
     .nullable()
     .optional(),
+
+  /*
+    'fixed_monthly' bills the amount above with rent.
+    'entered' bills the amount the owner types each month.
+  */
+  electricity_billing_method: z.enum([
+    "fixed_monthly",
+    "entered",
+  ]).optional(),
 
   /*
     Optional one-off deposit charged in full at move-in.

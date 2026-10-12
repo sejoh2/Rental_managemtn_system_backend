@@ -46,6 +46,15 @@ router.get(
   payment_controller.get_payment_stats
 );
 
+/*
+  Must stay above "/payments/:payment_id".
+*/
+router.get(
+  "/payments/export",
+  guard,
+  payment_controller.export_payments
+);
+
 router.get(
   "/payments/unmatched",
   guard,

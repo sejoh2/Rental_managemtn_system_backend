@@ -284,7 +284,7 @@ async function init_payment_tables() {
           ('water_deposit', NEW.water_deposit_due)
       ) AS deposits (charge_type, amount)
       WHERE deposits.amount > 0
-      ON CONFLICT (tenant_id, charge_type, billing_period)
+      ON CONFLICT (tenant_id, charge_type, billing_period, source_id)
       DO NOTHING;
 
       RETURN NEW;
@@ -299,6 +299,45 @@ async function init_payment_tables() {
       AFTER INSERT ON tenants
       FOR EACH ROW
       EXECUTE FUNCTION create_initial_tenant_charges();
+  `);
+
+  /*
+    Upgrade for service and repair charges. A tenant can hold
+    several of these in one month, so each charge also carries
+    what it is for (description) and the service charge or
+    maintenance request it came from (source_id), and a charge
+    is unique per source. Every statement is safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE tenant_charges
+      ADD COLUMN IF NOT EXISTS description VARCHAR(255);
+
+    ALTER TABLE tenant_charges
+      ADD COLUMN IF NOT EXISTS source_id BIGINT
+      NOT NULL DEFAULT 0;
+
+    ALTER TABLE tenant_charges
+      DROP CONSTRAINT IF EXISTS
+      tenant_charges_tenant_id_charge_type_billing_period_key;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'tenant_charges_unique_charge'
+      ) THEN
+        ALTER TABLE tenant_charges
+          ADD CONSTRAINT tenant_charges_unique_charge
+          UNIQUE (
+            tenant_id,
+            charge_type,
+            billing_period,
+            source_id
+          );
+      END IF;
+    END
+    $$;
   `);
 
   /*
@@ -327,7 +366,7 @@ async function init_payment_tables() {
       rent_deposit_due
     FROM tenants
     WHERE rent_deposit_due > 0
-    ON CONFLICT (tenant_id, charge_type, billing_period)
+    ON CONFLICT (tenant_id, charge_type, billing_period, source_id)
     DO NOTHING;
 
     INSERT INTO tenant_charges (
@@ -351,7 +390,7 @@ async function init_payment_tables() {
       water_deposit_due
     FROM tenants
     WHERE water_deposit_due > 0
-    ON CONFLICT (tenant_id, charge_type, billing_period)
+    ON CONFLICT (tenant_id, charge_type, billing_period, source_id)
     DO NOTHING;
   `);
 
@@ -372,7 +411,10 @@ async function init_payment_tables() {
           'rent',
           'water',
           'electricity',
-          'electricity_deposit'
+          'electricity_deposit',
+          'service',
+          'repair',
+          'deduction'
         )
       );
 
@@ -392,7 +434,14 @@ async function init_payment_tables() {
 
     ALTER TABLE payments
       ADD CONSTRAINT payments_account_for_check
-      CHECK (account_for IN ('rent', 'water', 'electricity'));
+      CHECK (
+        account_for IN (
+          'rent',
+          'water',
+          'electricity',
+          'service'
+        )
+      );
   `);
 
   console.log("[PAYMENTS] Payment tables initialized.");

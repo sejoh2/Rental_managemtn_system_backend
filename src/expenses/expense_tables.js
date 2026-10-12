@@ -142,6 +142,21 @@ async function init_expense_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    An expense created from a resolved maintenance request
+    points back to it, and to the unit that was repaired.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE expenses
+      ADD COLUMN IF NOT EXISTS maintenance_request_id BIGINT;
+
+    ALTER TABLE expenses
+      ADD COLUMN IF NOT EXISTS unit_id BIGINT
+      REFERENCES units(id)
+      ON DELETE SET NULL;
+  `);
+
   console.log("[EXPENSES] Tables initialized.");
 }
 

@@ -35,6 +35,9 @@ tags:
   - name: Step 7 - Water billing
   - name: Step 8 - Agreements
   - name: Step 9 - Expenses
+  - name: Service charges
+  - name: Electricity bills
+  - name: Deposit reconciliation
   - name: Step 10 - Maintenance
   - name: Step 11 - Caretakers
   - name: Step 12 - SMS Centre
@@ -475,7 +478,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [rent, water, electricity]
+            enum: [rent, water, electricity, service]
       requestBody:
         required: true
         content:
@@ -497,10 +500,12 @@ paths:
 
     delete:
       tags: [Step 3 - Properties and M-Pesa]
-      summary: Remove a property's water or electricity M-Pesa account
+      summary: Remove a property's water, electricity or service charge M-Pesa account
       description: |
         Owner only. The rent account cannot be removed. Afterwards those charges
         are paid through the rent account. Earlier payments stay on record.
+        If service charges were paid into the removed account, the property's
+        `service_charge_account` goes back to `rent`.
       security:
         - bearerAuth: []
       parameters:
@@ -510,7 +515,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [water, electricity]
+            enum: [water, electricity, service]
       responses:
         "200":
           description: Payment account removed
@@ -775,6 +780,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentListResponse"
+
+  /api/payments/export:
+    get:
+      tags: [Step 6 - Payments]
+      summary: Export payments as CSV
+      description: |
+        Returns every matching record as a CSV file. The export is written to
+        the audit log. Cells that a spreadsheet would read as a formula are
+        neutralised.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema: { type: integer }
+        - name: from_date
+          in: query
+          schema: { type: string, format: date }
+        - name: to_date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
 
   /api/payments/stats:
     get:
@@ -1373,6 +1407,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/expenses/export:
+    get:
+      tags: [Step 9 - Expenses]
+      summary: Export expenses as CSV
+      description: |
+        Returns every matching record as a CSV file. The export is written to
+        the audit log. Cells that a spreadsheet would read as a formula are
+        neutralised.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: property_id
+          in: query
+          schema: { type: integer }
+        - name: from_date
+          in: query
+          schema: { type: string, format: date }
+        - name: to_date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
   /api/expenses/summary:
     get:
       tags: [Step 9 - Expenses]
@@ -1428,6 +1491,296 @@ paths:
       responses:
         "200":
           description: Expense voided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/service-charges:
+    get:
+      tags: [Service charges]
+      summary: List a property's service charges
+      description: |
+        Owner only. Each charge lists what every unit of the property pays
+        for it in `unit_amounts`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Service charges
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    post:
+      tags: [Service charges]
+      summary: Add a service charge
+      description: |
+        Owner only. A cost passed on to tenants, such as garbage or security.
+
+        Tenants living in the property are billed straight away:
+        - `monthly`: the rest of this month under the property's
+          `move_in_billing` rule (pro-rated: amount x (days in month - today's
+          day) / days in month), then the full amount on the 1st of each month.
+          The move-out month follows `move_out_billing`.
+        - `once`: the full amount, a single time. Each new tenant is also
+          billed once when they move in.
+
+        The response includes `billing: { tenants_billed, total_billed }`.
+        The action is written to the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceChargeRequest"
+      responses:
+        "201":
+          description: Service charge added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "409":
+          description: The property already has a service charge with this name
+
+  /api/service-charges/{service_charge_id}:
+    patch:
+      tags: [Service charges]
+      summary: Update a service charge
+      description: |
+        Owner only. New amounts apply to bills created from now on; charges
+        tenants were already billed are not changed. The frequency cannot be
+        changed. When `unit_amounts` is sent it replaces all per-unit amounts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceChargeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceChargeRequest"
+      responses:
+        "200":
+          description: Service charge updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    delete:
+      tags: [Service charges]
+      summary: Remove a service charge
+      description: |
+        Owner only. The charge is no longer billed. What tenants were already
+        billed stays on their accounts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceChargeId"
+      responses:
+        "200":
+          description: Service charge removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+
+  /api/expenses/reconciliation:
+    get:
+      tags: [Step 9 - Expenses]
+      summary: Compare what was spent with what tenants were charged
+      description: |
+        For each expense category: `spent` (expenses in the period),
+        `charged` (service charges, repairs and move-out deductions billed to
+        tenants for the period), `paid` (how much of that tenants have paid),
+        `outstanding` (charged - paid) and `owner_cost` (spent - charged).
+        A monthly charge belongs to its billing month; a one-off charge, repair
+        or deduction belongs to the day it was billed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExpenseFilters"
+      responses:
+        "200":
+          description: Reconciliation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/properties/{property_id}/electricity-bills:
+    get:
+      tags: [Electricity bills]
+      summary: List the month's electricity bills for units billed by entered amount
+      description: |
+        Owner only. Returns every unit whose `electricity_billing_method` is
+        `entered`, the tenant living there and the amount entered for the month.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+        - name: period
+          in: query
+          description: Month as YYYY-MM. Defaults to the current month.
+          schema: { type: string, example: 2026-10 }
+      responses:
+        "200":
+          description: Electricity bills
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+    put:
+      tags: [Electricity bills]
+      summary: Enter the month's electricity amount per unit
+      description: |
+        Owner only. Bills the tenant living in each unit exactly the amount
+        entered. Sending a new amount replaces the earlier one; it cannot be
+        lower than what the tenant has already paid towards it. Zero removes an
+        unpaid bill. Written to the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [period, bills]
+              properties:
+                period: { type: string, example: 2026-10 }
+                bills:
+                  type: array
+                  items:
+                    type: object
+                    required: [unit_id, amount]
+                    properties:
+                      unit_id: { type: integer }
+                      amount: { type: number, example: 850 }
+      responses:
+        "200":
+          description: Electricity bills saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/deposit-reconciliation:
+    get:
+      tags: [Deposit reconciliation]
+      summary: Get a moved-out tenant's deposit reconciliation
+      description: |
+        Owner only. Before it is confirmed, `status` is `open` and `groups`
+        shows each deposit separately: what is held, the unpaid bills it has
+        to cover, what is left and any shortfall. The rent deposit covers rent,
+        service charges, repairs and deductions; the water deposit covers
+        water; the electricity deposit covers electricity. After it is
+        confirmed, `status` is `confirmed` and `settlement` holds the result.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Reconciliation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/deposit-reconciliation/calculate:
+    post:
+      tags: [Deposit reconciliation]
+      summary: Calculate the final figure without saving
+      description: |
+        Owner only. Merges the deposits and any credit the tenant holds and
+        returns `refund_due` or `tenant_owes` for the deductions sent.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositDeductionsRequest"
+      responses:
+        "200":
+          description: Final figure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/deposit-reconciliation/confirm:
+    post:
+      tags: [Deposit reconciliation]
+      summary: Confirm the reconciliation
+      description: |
+        Owner only, final. Deductions become charges on the tenant. Each
+        deposit pays its own bills, then money left over and credit pay what
+        remains. Deposit money used for a bill counts as income on this day.
+        What is left is the refund due; what is still unpaid stays as the
+        tenant's debt. Written to the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositDeductionsRequest"
+      responses:
+        "200":
+          description: Deposits reconciled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "409":
+          description: Already reconciled
+
+  /api/tenants/{tenant_id}/deposit-reconciliation/refund:
+    post:
+      tags: [Deposit reconciliation]
+      summary: Record that the refund was paid to the tenant
+      description: Owner only. The refund is paid once, in full. Written to the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paid_on, method]
+              properties:
+                paid_on: { type: string, format: date }
+                method:
+                  type: string
+                  enum: [mpesa, cash, bank, other]
+                reference:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Refund recorded
           content:
             application/json:
               schema:
@@ -2123,6 +2476,14 @@ components:
         type: integer
         minimum: 1
 
+    ServiceChargeId:
+      name: service_charge_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
     MaintenanceRequestId:
       name: request_id
       in: path
@@ -2387,7 +2748,7 @@ components:
       properties:
         account_for:
           type: string
-          enum: [rent, water, electricity]
+          enum: [rent, water, electricity, service]
         account:
           $ref: "#/components/schemas/MpesaAccount"
         property_id:
@@ -2407,7 +2768,7 @@ components:
               format: uuid
             account_for:
               type: string
-              enum: [rent, water, electricity]
+              enum: [rent, water, electricity, service]
             expires_at:
               type: string
               format: date-time
@@ -2474,6 +2835,18 @@ components:
           format: uuid
           nullable: true
           description: Optional. Without it, electricity is paid through the rent account.
+        service_connection_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Optional. A separate account for service charges and repairs.
+        service_charge_account:
+          type: string
+          enum: [rent, water, electricity, service]
+          default: rent
+          description: |
+            The account tenants pay service charges and repairs into.
+            Anything other than `rent` needs that account's connection ID.
 
     Property:
       type: object
@@ -2501,6 +2874,13 @@ components:
         electricity_account:
           nullable: true
           description: Null when electricity is paid through the rent account.
+        service_account:
+          nullable: true
+          description: Null unless the property has a separate service charge account.
+        service_charge_account:
+          type: string
+          enum: [rent, water, electricity, service]
+          description: The account tenants pay service charges and repairs into.
         summary:
           type: object
           properties:
@@ -2553,6 +2933,12 @@ components:
           type: string
           nullable: true
           example: KODI
+        service_charge_account:
+          type: string
+          enum: [rent, water, electricity, service]
+          description: |
+            The account tenants pay service charges and repairs into.
+            The property must have that account.
 
     PropertyResponse:
       type: object
@@ -2610,6 +2996,13 @@ components:
           nullable: true
           description: Optional fixed amount billed with rent on the 1st of every month.
           example: 2000
+        electricity_billing_method:
+          type: string
+          enum: [fixed_monthly, entered]
+          default: fixed_monthly
+          description: |
+            fixed_monthly bills electricity_monthly_charge with rent.
+            entered bills the amount the owner types each month.
         electricity_deposit:
           type: number
           nullable: true
@@ -2777,7 +3170,7 @@ components:
           enum: [cash, mpesa, bank, other]
         account_for:
           type: string
-          enum: [rent, water, electricity]
+          enum: [rent, water, electricity, service]
           default: rent
         received_at:
           type: string
@@ -2914,6 +3307,63 @@ components:
           maximum: 365
           default: 30
 
+    DepositDeductionsRequest:
+      type: object
+      properties:
+        deductions:
+          type: array
+          description: Amounts kept from the rent deposit, such as repainting.
+          items:
+            type: object
+            required: [description, amount]
+            properties:
+              description: { type: string, example: Repainting }
+              amount: { type: number, example: 1000 }
+
+    CreateServiceChargeRequest:
+      type: object
+      required: [name, category, frequency, amount]
+      properties:
+        name: { type: string, example: Garbage collection }
+        category:
+          type: string
+          enum: [repairs_maintenance, security, garbage, cleaning, utilities, other]
+          description: The expense category this charge recovers.
+        frequency:
+          type: string
+          enum: [monthly, once]
+        amount:
+          type: number
+          example: 300
+          description: Billed to every unit that has no amount of its own.
+        unit_amounts:
+          type: array
+          description: Units that pay a different amount. Zero means the unit is not charged.
+          items:
+            type: object
+            required: [unit_id, amount]
+            properties:
+              unit_id: { type: integer }
+              amount: { type: number, example: 500 }
+
+    UpdateServiceChargeRequest:
+      type: object
+      description: Provide at least one field.
+      properties:
+        name: { type: string }
+        category:
+          type: string
+          enum: [repairs_maintenance, security, garbage, cleaning, utilities, other]
+        amount: { type: number }
+        unit_amounts:
+          type: array
+          items:
+            type: object
+            required: [unit_id, amount]
+            properties:
+              unit_id: { type: integer }
+              amount: { type: number }
+
     CreateExpenseRequest:
       type: object
       required: [category, amount, expense_date]
@@ -2972,6 +3422,13 @@ components:
         actual_cost:
           type: number
           nullable: true
+        charge_to_tenant:
+          type: boolean
+          description: |
+            Owner only. When the request is resolved with an actual cost, the
+            cost is always recorded as a property expense. If this is true it
+            is also charged to the tenant living in the unit, who is told by
+            SMS. The cost cannot be changed afterwards.
         resolution_notes:
           type: string
           nullable: true

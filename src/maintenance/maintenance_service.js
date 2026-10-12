@@ -4,6 +4,14 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
+const {
+  apply_tenant_credits,
+} = require("../billing/billing_service");
+
+const {
+  send_sms,
+} = require("../utils/sms_provider");
+
 function public_request(request) {
   return {
     id: Number(request.id),
@@ -49,6 +57,29 @@ function public_request(request) {
       request.actual_cost === null
         ? null
         : Number(request.actual_cost),
+
+    /*
+      Whether the cost is charged to the tenant, and what was
+      recorded once the request was resolved with a cost.
+    */
+    charge_to_tenant: Boolean(request.charge_to_tenant),
+
+    expense_id: request.expense_id
+      ? Number(request.expense_id)
+      : null,
+
+    tenant_charge_id: request.tenant_charge_id
+      ? Number(request.tenant_charge_id)
+      : null,
+
+    charged_tenant_id: request.charged_tenant_id
+      ? Number(request.charged_tenant_id)
+      : null,
+
+    /*
+      The tenant living in the unit now, if any.
+    */
+    unit_tenant_name: request.unit_tenant_name || null,
 
     resolution_notes: request.resolution_notes,
     resolved_at: request.resolved_at,
@@ -319,6 +350,19 @@ async function get_request_row(
         properties.name AS property_name,
         units.unit_number,
 
+        (
+          SELECT tenants.full_name
+          FROM tenants
+          WHERE tenants.unit_id =
+            maintenance_requests.unit_id
+            AND tenants.status IN (
+              'active',
+              'notice_given'
+            )
+          ORDER BY tenants.created_at DESC
+          LIMIT 1
+        ) AS unit_tenant_name,
+
         CONCAT(
           reporter.first_name,
           ' ',
@@ -408,6 +452,19 @@ async function list_requests(user, filters) {
         properties.name AS property_name,
         units.unit_number,
 
+        (
+          SELECT tenants.full_name
+          FROM tenants
+          WHERE tenants.unit_id =
+            maintenance_requests.unit_id
+            AND tenants.status IN (
+              'active',
+              'notice_given'
+            )
+          ORDER BY tenants.created_at DESC
+          LIMIT 1
+        ) AS unit_tenant_name,
+
         CONCAT(
           reporter.first_name,
           ' ',
@@ -496,6 +553,237 @@ async function list_requests(user, filters) {
   return result.rows.map(public_request);
 }
 
+/*
+  Runs when a request is resolved and has an actual cost that
+  has not been recorded yet.
+
+  - The cost is always recorded as a property expense.
+  - If the owner ticked "charge to tenant", it is also charged
+    to the tenant living in the unit. The tenant can pay it
+    during their stay; anything unpaid is deducted from their
+    deposit at move-out.
+
+  Returns null when there is nothing to record.
+*/
+async function record_repair_cost(client, user, request) {
+  if (
+    request.status !== "resolved" ||
+    !(Number(request.actual_cost) > 0) ||
+    request.expense_id
+  ) {
+    return null;
+  }
+
+  const expense_result = await client.query(
+    `
+      INSERT INTO expenses (
+        owner_id,
+        property_id,
+        category,
+        amount,
+        expense_date,
+        notes,
+        created_by,
+        created_by_role,
+        maintenance_request_id,
+        unit_id
+      )
+      VALUES (
+        $1,$2,
+        'repairs_maintenance',
+        $3,
+        (
+          CURRENT_TIMESTAMP
+          AT TIME ZONE 'Africa/Nairobi'
+        )::DATE,
+        $4,$5,$6,$7,$8
+      )
+      RETURNING *
+    `,
+    [
+      request.owner_id,
+      request.property_id,
+      request.actual_cost,
+      `Repair: ${request.title}`,
+      user.user_id,
+      user.role,
+      request.id,
+      request.unit_id,
+    ]
+  );
+
+  const expense = expense_result.rows[0];
+
+  let tenant = null;
+  let charge = null;
+
+  if (request.charge_to_tenant) {
+    const tenant_result = await client.query(
+      `
+        SELECT
+          tenants.*,
+          units.unit_number,
+          properties.name AS property_name,
+          properties.sms_sender_id
+        FROM tenants
+        INNER JOIN units
+          ON units.id = tenants.unit_id
+        INNER JOIN properties
+          ON properties.id = tenants.property_id
+        WHERE tenants.unit_id = $1
+          AND tenants.status IN (
+            'active',
+            'notice_given'
+          )
+        ORDER BY tenants.created_at DESC
+        LIMIT 1
+      `,
+      [request.unit_id]
+    );
+
+    tenant = tenant_result.rows[0];
+
+    if (!tenant) {
+      const error = new Error(
+        "No tenant lives in this unit now, so the cost cannot be charged to a tenant. Untick \"charge to tenant\" and try again."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+
+    /*
+      A repair is billed once, not for a month, so it uses the
+      placeholder period 1970-01-01 like deposits do.
+    */
+    const charge_result = await client.query(
+      `
+        INSERT INTO tenant_charges (
+          tenant_id,
+          owner_id,
+          property_id,
+          unit_id,
+          charge_type,
+          billing_period,
+          due_date,
+          amount_due,
+          description,
+          source_id
+        )
+        VALUES (
+          $1,$2,$3,$4,
+          'repair',
+          DATE '1970-01-01',
+          (
+            CURRENT_TIMESTAMP
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE,
+          $5,$6,$7
+        )
+        RETURNING *
+      `,
+      [
+        tenant.id,
+        tenant.owner_id,
+        tenant.property_id,
+        tenant.unit_id,
+        request.actual_cost,
+        `Repair: ${request.title}`.slice(0, 255),
+        request.id,
+      ]
+    );
+
+    charge = charge_result.rows[0];
+
+    await apply_tenant_credits(client, tenant.id);
+  }
+
+  await client.query(
+    `
+      UPDATE maintenance_requests
+      SET
+        expense_id = $1,
+        tenant_charge_id = $2,
+        charged_tenant_id = $3
+      WHERE id = $4
+    `,
+    [
+      expense.id,
+      charge?.id || null,
+      tenant?.id || null,
+      request.id,
+    ]
+  );
+
+  return { expense, tenant, charge };
+}
+
+/*
+  Audit entries for a recorded repair cost, and an SMS telling
+  the tenant when the cost was charged to them. Runs after the
+  transaction, so a failed SMS never undoes the charge.
+*/
+async function announce_repair_cost(
+  user,
+  request,
+  repair,
+  ip_address
+) {
+  if (!repair) {
+    return;
+  }
+
+  await log_audit({
+    user_id: user.user_id,
+    action: "EXPENSE_RECORDED",
+    entity_type: "expense",
+    entity_id: repair.expense.id,
+    metadata: {
+      property_id: request.property_id,
+      category: repair.expense.category,
+      amount: repair.expense.amount,
+      maintenance_request_id: request.id,
+      created_by_role: user.role,
+    },
+    ip_address,
+  });
+
+  if (!repair.charge) {
+    return;
+  }
+
+  const amount = Number(
+    repair.charge.amount_due
+  ).toLocaleString("en-KE");
+
+  let sms_status = "sent";
+
+  try {
+    await send_sms({
+      phone: repair.tenant.payment_phone,
+      message: `Dear ${repair.tenant.full_name.split(" ")[0]}, a repair at House ${repair.tenant.unit_number} (${request.title}) has been charged to your account: KES ${amount}. Please include it in your next payment. ${repair.tenant.property_name}`,
+      sender_id: repair.tenant.sms_sender_id,
+    });
+  } catch (error) {
+    sms_status = `failed: ${error.message}`;
+  }
+
+  await log_audit({
+    user_id: user.user_id,
+    action: "REPAIR_CHARGED_TO_TENANT",
+    entity_type: "tenant",
+    entity_id: repair.tenant.id,
+    metadata: {
+      property_id: request.property_id,
+      maintenance_request_id: request.id,
+      title: request.title,
+      amount: repair.charge.amount_due,
+      sms: sms_status,
+    },
+    ip_address,
+  });
+}
+
 async function update_request(
   user,
   request_id,
@@ -541,6 +829,7 @@ async function update_request(
         "assigned_vendor_name",
         "estimated_cost",
         "actual_cost",
+        "charge_to_tenant",
         "cancellation_reason",
       ];
 
@@ -624,6 +913,35 @@ async function update_request(
       throw error;
     }
 
+    if (data.charge_to_tenant && !existing.unit_id) {
+      const error = new Error(
+        "This repair is not in a unit, so its cost cannot be charged to a tenant."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+
+    /*
+      Once the cost is recorded as an expense it is fixed.
+    */
+    if (
+      existing.expense_id &&
+      ((data.actual_cost !== undefined &&
+        Number(data.actual_cost) !==
+          Number(existing.actual_cost)) ||
+        (data.charge_to_tenant !== undefined &&
+          data.charge_to_tenant !==
+            existing.charge_to_tenant))
+    ) {
+      const error = new Error(
+        "The cost of this repair has already been recorded as an expense, so it can no longer be changed here."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
     const result = await client.query(
       `
         UPDATE maintenance_requests
@@ -673,6 +991,11 @@ async function update_request(
               THEN $14
               ELSE cancellation_reason
             END,
+
+          charge_to_tenant = COALESCE(
+            $16::BOOLEAN,
+            charge_to_tenant
+          ),
 
           resolved_at = CASE
             WHEN $1 = 'resolved'
@@ -730,12 +1053,20 @@ async function update_request(
         data.cancellation_reason ?? null,
 
         existing.id,
+
+        data.charge_to_tenant ?? null,
       ]
     );
 
-    await client.query("COMMIT");
-
     const updated = result.rows[0];
+
+    const repair = await record_repair_cost(
+      client,
+      user,
+      updated
+    );
+
+    await client.query("COMMIT");
 
     await log_audit({
       user_id: user.user_id,
@@ -748,6 +1079,13 @@ async function update_request(
       },
       ip_address,
     });
+
+    await announce_repair_cost(
+      user,
+      updated,
+      repair,
+      ip_address
+    );
 
     return get_request_by_id(user, updated.id);
   } catch (error) {

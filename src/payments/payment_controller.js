@@ -1,6 +1,16 @@
 const payment_service = require("./payment_service");
 
 const {
+  log_audit,
+} = require("../audit/audit_service");
+
+const {
+  send_csv,
+  humanize,
+} = require("../utils/csv");
+
+const {
+  validate_export_payments,
   validate_match_payment,
   validate_reverse_payment,
   validate_manual_payment,
@@ -18,6 +28,110 @@ async function list_payments(req, res, next) {
       success: true,
       data: payments,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+const method_labels = {
+  mpesa: "M-Pesa",
+  cash: "Cash",
+  bank: "Bank transfer",
+  other: "Other",
+};
+
+function how_received(payment) {
+  if (payment.match_type === "automatic") {
+    return "Auto-matched";
+  }
+
+  if (payment.payment_source === "manual") {
+    return "Recorded manually";
+  }
+
+  return payment.match_type === "manual"
+    ? "Matched manually"
+    : "";
+}
+
+/*
+  Deposits and one-off charges are not billed for a month:
+  they use the placeholder period 1970-01-01.
+*/
+function applied_to_text(payment) {
+  return payment.applied_to
+    .map((item) => {
+      const name =
+        item.description || humanize(item.charge_type);
+
+      return item.period_label === "Jan 1970"
+        ? name
+        : `${name} ${item.period_label}`;
+    })
+    .join("; ");
+}
+
+/*
+  The file is built here, not in the browser, so it always
+  holds the complete, permission-checked data, and every
+  export of financial records is written to the audit log.
+*/
+async function export_payments(req, res, next) {
+  try {
+    const filters = validate_export_payments(req.query);
+
+    const payments = await payment_service.list_payments(
+      req.user,
+      filters
+    );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "PAYMENTS_EXPORTED",
+      entity_type: "payment",
+      metadata: {
+        ...filters,
+        rows: payments.length,
+      },
+      ip_address: req.ip,
+    });
+
+    return send_csv(
+      res,
+      `payments-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        "Date",
+        "Tenant",
+        "Property",
+        "Unit",
+        "Payer phone",
+        "Amount (KES)",
+        "Method",
+        "How received",
+        "Paid into",
+        "Applied to",
+        "Reference",
+        "Status",
+        "Reversal reason",
+      ],
+      payments.map((payment) => [
+        payment.received_at_local,
+        payment.tenant_name,
+        payment.property_name,
+        payment.unit_number,
+        payment.payer_phone,
+        payment.amount,
+        method_labels[payment.payment_method] ||
+          payment.payment_method,
+        how_received(payment),
+        humanize(payment.account_for),
+        applied_to_text(payment),
+        payment.provider_transaction_id ||
+          payment.reference,
+        humanize(payment.status),
+        payment.reverse_reason,
+      ])
+    );
   } catch (error) {
     next(error);
   }
@@ -207,6 +321,7 @@ async function list_tenant_payments(req, res, next) {
 
 module.exports = {
   list_payments,
+  export_payments,
   list_unmatched_payments,
   get_payment_stats,
   get_payment,

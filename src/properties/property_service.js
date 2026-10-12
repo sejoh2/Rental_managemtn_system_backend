@@ -82,6 +82,17 @@ function public_property(
           account.account_for === "electricity"
       ) || null,
 
+    service_account:
+      accounts.find(
+        (account) => account.account_for === "service"
+      ) || null,
+
+    /*
+      The account tenants pay service charges and repairs into.
+    */
+    service_charge_account:
+      property.service_charge_account,
+
     /*
       Lets the Properties page render its cards and details
       panel without extra requests per property.
@@ -381,6 +392,7 @@ async function create_payment_account(
     rent: "Rent M-Pesa account",
     water: "Water M-Pesa account",
     electricity: "Electricity M-Pesa account",
+    service: "Service charges M-Pesa account",
   }[account_for];
 
   const result = await client.query(
@@ -458,6 +470,7 @@ async function create_property(owner, data, ip_address) {
       ["rent", data.rent_connection_id],
       ["water", data.water_connection_id],
       ["electricity", data.electricity_connection_id],
+      ["service", data.service_connection_id],
     ]) {
       if (!connection_id) {
         continue;
@@ -537,11 +550,12 @@ async function create_property(owner, data, ip_address) {
           water_billing_day,
           water_reading_due_days,
           water_missed_reading_action,
-          sms_sender_id
+          sms_sender_id,
+          service_charge_account
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16
+          $11,$12,$13,$14,$15,$16,$17
         )
         RETURNING id
       `,
@@ -562,6 +576,7 @@ async function create_property(owner, data, ip_address) {
         data.water_reading_due_days,
         data.water_missed_reading_action,
         data.sms_sender_id || null,
+        data.service_charge_account,
       ]
     );
 
@@ -639,11 +654,37 @@ async function update_property(
     "move_in_billing",
     "move_out_billing",
     "sms_sender_id",
+    "service_charge_account",
   ];
 
   const updated_fields = editable_fields.filter(
     (field) => data[field] !== undefined
   );
+
+  /*
+    Service charges can only be paid into an account the
+    property actually has.
+  */
+  if (
+    data.service_charge_account &&
+    data.service_charge_account !== "rent"
+  ) {
+    const { account } = await get_property_payment_account(
+      db,
+      owner.user_id,
+      property_id,
+      data.service_charge_account
+    );
+
+    if (!account || account.status !== "active") {
+      const error = new Error(
+        "Connect that account first, or have service charges paid into the rent account."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+  }
 
   const assignments = updated_fields.map(
     (field, index) => `${field} = $${index + 1}`
@@ -865,8 +906,9 @@ async function replace_payment_account(
 }
 
 /*
-  Removes a property's optional water or electricity account.
-  Those charges are then paid through the rent account.
+  Removes a property's optional water, electricity or service
+  charge account. Those charges are then paid through the
+  rent account.
 
   The row is kept and marked inactive so earlier payments keep
   pointing at it, and its business number becomes free again.
@@ -902,6 +944,20 @@ async function remove_payment_account(
       WHERE id = $1
     `,
     [account.id]
+  );
+
+  /*
+    Service charges that were paid into this account go
+    back to the rent account.
+  */
+  await db.query(
+    `
+      UPDATE properties
+      SET service_charge_account = 'rent'
+      WHERE id = $1
+        AND service_charge_account = $2
+    `,
+    [property_id, account_for]
   );
 
   await log_audit({

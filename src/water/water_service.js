@@ -229,7 +229,8 @@ async function create_water_charge(
       ON CONFLICT (
         tenant_id,
         charge_type,
-        billing_period
+        billing_period,
+        source_id
       )
       DO NOTHING
       RETURNING *

@@ -915,6 +915,9 @@ async function get_tenant_statement(
                 'charge_type',
                 tenant_charges.charge_type,
 
+                'description',
+                tenant_charges.description,
+
                 'billing_period',
                 tenant_charges.billing_period,
 
@@ -1018,6 +1021,7 @@ async function get_tenant_statement(
         id: Number(charge.id),
 
         charge_type: charge.charge_type,
+        description: charge.description,
         billing_period: charge.billing_period,
         due_date: charge.due_date,
 

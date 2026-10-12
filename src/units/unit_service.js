@@ -46,6 +46,13 @@ function public_unit(unit) {
         : null,
 
     /*
+      'fixed_monthly' bills the amount above with rent.
+      'entered' bills the amount the owner types each month.
+    */
+    electricity_billing_method:
+      unit.electricity_billing_method,
+
+    /*
       Optional one-off deposit charged in full at move-in.
     */
     electricity_deposit:
@@ -272,10 +279,11 @@ async function create_unit(
         water_meter_number,
         status,
         electricity_monthly_charge,
-        electricity_deposit
+        electricity_deposit,
+        electricity_billing_method
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,$14,$7,$8,$9,$10,$11,$12,$13
+        $1,$2,$3,$4,$5,$6,$14,$7,$8,$9,$10,$11,$12,$13,$15
       )
       RETURNING *
     `,
@@ -306,6 +314,8 @@ async function create_unit(
       data.electricity_deposit || null,
 
       data.water_deposit || 0,
+
+      data.electricity_billing_method || "fixed_monthly",
     ]
   ).catch(throw_unit_number_conflict);
 
@@ -460,7 +470,12 @@ async function update_unit(
           ELSE electricity_deposit
         END,
 
-        water_deposit = COALESCE($16, water_deposit)
+        water_deposit = COALESCE($16, water_deposit),
+
+        electricity_billing_method = COALESCE(
+          $17,
+          electricity_billing_method
+        )
       WHERE id = $11
       RETURNING *
       ),
@@ -535,6 +550,8 @@ async function update_unit(
       data.electricity_deposit || null,
 
       data.water_deposit ?? null,
+
+      data.electricity_billing_method ?? null,
     ]
   ).catch(throw_unit_number_conflict);
 

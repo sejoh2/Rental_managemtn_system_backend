@@ -11,6 +11,13 @@ const move_out_billing_options = [
   "full_month",
 ];
 
+const service_charge_account_options = [
+  "rent",
+  "water",
+  "electricity",
+  "service",
+];
+
 const mpesa_account_schema = z.object({
   provider_code: z.literal("mpesa"),
 
@@ -43,7 +50,12 @@ const mpesa_account_schema = z.object({
 });
 
 const connect_account_schema = z.object({
-  account_for: z.enum(["rent", "water", "electricity"]),
+  account_for: z.enum([
+    "rent",
+    "water",
+    "electricity",
+    "service",
+  ]),
   account: mpesa_account_schema,
 
   /*
@@ -57,7 +69,12 @@ const connect_account_schema = z.object({
 });
 
 const replace_account_schema = z.object({
-  account_for: z.enum(["rent", "water", "electricity"]),
+  account_for: z.enum([
+    "rent",
+    "water",
+    "electricity",
+    "service",
+  ]),
   connection_id: z.string().uuid(),
 });
 
@@ -141,12 +158,41 @@ const create_property_schema = z.object({
     .uuid()
     .nullable()
     .optional(),
+
+  /*
+    An optional account of their own for service charges
+    and repairs.
+  */
+  service_connection_id: z.string()
+    .uuid()
+    .nullable()
+    .optional(),
+
+  /*
+    The account tenants pay service charges and repairs into.
+  */
+  service_charge_account: z.enum(
+    service_charge_account_options
+  ).default("rent"),
 }).superRefine((data, context) => {
   const connection_ids = [
     data.rent_connection_id,
     data.water_connection_id,
     data.electricity_connection_id,
+    data.service_connection_id,
   ].filter(Boolean);
+
+  if (
+    data.service_charge_account !== "rent" &&
+    !data[`${data.service_charge_account}_connection_id`]
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["service_charge_account"],
+      message:
+        "Connect that account first, or have service charges paid into the rent account.",
+    });
+  }
 
   if (
     new Set(connection_ids).size !==
@@ -206,6 +252,10 @@ const update_property_schema = z.object({
   move_out_billing: z.enum(move_out_billing_options)
     .optional(),
 
+  service_charge_account: z.enum(
+    service_charge_account_options
+  ).optional(),
+
   sms_sender_id: z.string()
     .trim()
     .max(50)
@@ -220,13 +270,16 @@ const update_property_schema = z.object({
 
 /*
   Every property keeps a rent account. Only the optional
-  water and electricity accounts can be removed.
+  water, electricity and service charge accounts can be removed.
 */
 const remove_account_schema = z.object({
-  account_for: z.enum(["water", "electricity"], {
-    message:
-      "Only the water or electricity account can be removed. A property always needs a rent account.",
-  }),
+  account_for: z.enum(
+    ["water", "electricity", "service"],
+    {
+      message:
+        "Only the water, electricity or service charge account can be removed. A property always needs a rent account.",
+    }
+  ),
 });
 
 function validate(schema, data) {

@@ -40,6 +40,7 @@ function public_payment(payment) {
 
     tenant_name: payment.tenant_name || null,
     unit_number: payment.unit_number || null,
+    property_name: payment.property_name || null,
 
     amount: Number(payment.amount),
 
@@ -55,6 +56,7 @@ function public_payment(payment) {
     reference: payment.reference,
 
     received_at: payment.received_at,
+    received_at_local: payment.received_at_local || null,
 
     status: payment.status,
     match_type: payment.match_type,
@@ -114,7 +116,12 @@ async function get_payment_allocations(
       SELECT
         payment_allocations.amount,
         tenant_charges.charge_type,
-        tenant_charges.billing_period
+        tenant_charges.description,
+        tenant_charges.billing_period,
+        TO_CHAR(
+          tenant_charges.billing_period,
+          'Mon YYYY'
+        ) AS period_label
       FROM payment_allocations
       INNER JOIN tenant_charges
         ON tenant_charges.id =
@@ -127,7 +134,9 @@ async function get_payment_allocations(
 
   return result.rows.map((allocation) => ({
     charge_type: allocation.charge_type,
+    description: allocation.description,
     billing_period: allocation.billing_period,
+    period_label: allocation.period_label,
     amount: Number(allocation.amount),
   }));
 }
@@ -773,7 +782,11 @@ async function record_manual_payment(
         FROM tenants
         WHERE id = $1
           AND owner_id = $2
-          AND status IN ('active', 'notice_given')
+          AND status IN (
+            'active',
+            'notice_given',
+            'moved_out'
+          )
         FOR UPDATE
       `,
       [
@@ -786,7 +799,7 @@ async function record_manual_payment(
 
     if (!tenant) {
       const error = new Error(
-        "Active tenant not found."
+        "Tenant not found."
       );
 
       error.status_code = 404;
@@ -884,22 +897,67 @@ async function get_payment_by_id(owner, payment_id) {
   return public_payment(payment);
 }
 
-async function list_payments(owner) {
+/*
+  filters are optional: property_id, status, and from_date /
+  to_date as calendar days in Kenya.
+*/
+async function list_payments(owner, filters = {}) {
   const result = await db.query(
     `
       SELECT
         payments.*,
         tenants.full_name AS tenant_name,
-        units.unit_number
+        units.unit_number,
+        properties.name AS property_name,
+        TO_CHAR(
+          payments.received_at
+          AT TIME ZONE 'Africa/Nairobi',
+          'YYYY-MM-DD HH24:MI'
+        ) AS received_at_local
       FROM payments
       LEFT JOIN tenants
         ON tenants.id = payments.tenant_id
       LEFT JOIN units
         ON units.id = payments.unit_id
+      LEFT JOIN properties
+        ON properties.id = payments.property_id
       WHERE payments.owner_id = $1
+
+        AND (
+          $2::BIGINT IS NULL
+          OR payments.property_id = $2
+        )
+
+        AND (
+          $3::VARCHAR IS NULL
+          OR payments.status = $3
+        )
+
+        AND (
+          $4::DATE IS NULL
+          OR (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE >= $4
+        )
+
+        AND (
+          $5::DATE IS NULL
+          OR (
+            payments.received_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE <= $5
+        )
+
       ORDER BY payments.received_at DESC
     `,
-    [owner.user_id]
+    [
+      owner.user_id,
+      filters.property_id || null,
+      filters.status || null,
+      filters.from_date || null,
+      filters.to_date || null,
+    ]
   );
 
   return Promise.all(

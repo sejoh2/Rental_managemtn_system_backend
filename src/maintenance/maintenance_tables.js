@@ -138,6 +138,33 @@ async function init_maintenance_tables() {
       EXECUTE FUNCTION update_updated_at_column();
   `);
 
+  /*
+    When a request is resolved with a cost, the cost is recorded
+    as an expense. If the owner ticked charge_to_tenant, it is
+    also charged to the tenant living in the unit.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS charge_to_tenant BOOLEAN
+      NOT NULL DEFAULT FALSE;
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS expense_id BIGINT
+      REFERENCES expenses(id)
+      ON DELETE SET NULL;
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS tenant_charge_id BIGINT
+      REFERENCES tenant_charges(id)
+      ON DELETE SET NULL;
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS charged_tenant_id BIGINT
+      REFERENCES tenants(id)
+      ON DELETE SET NULL;
+  `);
+
   console.log("[MAINTENANCE] Tables initialized.");
 }
 

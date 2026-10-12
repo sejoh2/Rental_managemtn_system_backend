@@ -22,6 +22,12 @@ const {
   init_payment_tables,
 } = require("./src/payments/payment_tables");
 const {
+  init_service_charge_tables,
+} = require("./src/service_charges/service_charge_tables");
+const {
+  init_deposit_tables,
+} = require("./src/deposits/deposit_tables");
+const {
   init_water_tables,
 } = require("./src/water/water_tables");
 const {
@@ -87,6 +93,8 @@ async function start_server() {
     await init_unit_tables();
     await init_tenant_tables();
     await init_payment_tables();
+    await init_service_charge_tables();
+    await init_deposit_tables();
     await init_water_tables();
     await init_expense_tables();
     await init_maintenance_tables();

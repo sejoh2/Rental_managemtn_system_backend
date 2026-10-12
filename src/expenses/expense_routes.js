@@ -37,10 +37,25 @@ router.get(
   expense_controller.list_expenses
 );
 
+/*
+  Must stay above "/expenses/:expense_id".
+*/
+router.get(
+  "/expenses/export",
+  guard,
+  expense_controller.export_expenses
+);
+
 router.get(
   "/expenses/summary",
   guard,
   expense_controller.get_expense_summary
+);
+
+router.get(
+  "/expenses/reconciliation",
+  guard,
+  expense_controller.get_expense_reconciliation
 );
 
 router.get(

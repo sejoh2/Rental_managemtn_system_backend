@@ -24,6 +24,13 @@ function public_expense(expense) {
     void_reason: expense.void_reason,
     voided_at: expense.voided_at,
 
+    /*
+      Set when the expense came from a maintenance request.
+    */
+    maintenance_request_id: expense.maintenance_request_id
+      ? Number(expense.maintenance_request_id)
+      : null,
+
     created_by: expense.created_by
       ? Number(expense.created_by)
       : null,
@@ -450,9 +457,10 @@ async function get_expense_summary(
       ),
 
       /*
-        Income is what payments actually settled: rent, water and
-        electricity bills. Deposits are held for the tenant, so
-        they are not income. This matches the Reports figures.
+        Income is what payments actually settled: rent, water,
+        electricity, service charges and repairs. Deposits are
+        held for the tenant, so they are not income until they
+        are used for a bill at move-out.
       */
       selected_payments AS (
         SELECT
@@ -500,6 +508,57 @@ async function get_expense_summary(
                 AND property_caretaker_assignments.status = 'active'
             )
           )
+
+        UNION ALL
+
+        /*
+          Deposit and credit money used for a tenant's bills
+          at move-out becomes income on the day it was used.
+        */
+        SELECT
+          deposit_applications.amount,
+          tenant_charges.charge_type AS income_type
+        FROM deposit_applications
+        INNER JOIN deposit_settlements
+          ON deposit_settlements.id =
+            deposit_applications.settlement_id
+        INNER JOIN tenant_charges
+          ON tenant_charges.id =
+            deposit_applications.tenant_charge_id
+        WHERE deposit_settlements.owner_id = $1
+
+          AND (
+            $2::BIGINT IS NULL
+            OR deposit_settlements.property_id = $2
+          )
+
+          AND (
+            $3::DATE IS NULL
+            OR (
+              deposit_settlements.confirmed_at
+              AT TIME ZONE 'Africa/Nairobi'
+            )::DATE >= $3
+          )
+
+          AND (
+            $4::DATE IS NULL
+            OR (
+              deposit_settlements.confirmed_at
+              AT TIME ZONE 'Africa/Nairobi'
+            )::DATE <= $4
+          )
+
+          AND (
+            $5::BIGINT IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM property_caretaker_assignments
+              WHERE property_caretaker_assignments.property_id =
+                deposit_settlements.property_id
+                AND property_caretaker_assignments.caretaker_id = $5
+                AND property_caretaker_assignments.status = 'active'
+            )
+          )
       )
 
       SELECT
@@ -524,7 +583,19 @@ async function get_expense_summary(
           SELECT COALESCE(SUM(amount), 0)
           FROM selected_payments
           WHERE income_type = 'electricity'
-        ) AS electricity_collected
+        ) AS electricity_collected,
+
+        (
+          SELECT COALESCE(SUM(amount), 0)
+          FROM selected_payments
+          WHERE income_type = 'service'
+        ) AS service_collected,
+
+        (
+          SELECT COALESCE(SUM(amount), 0)
+          FROM selected_payments
+          WHERE income_type IN ('repair', 'deduction')
+        ) AS repairs_collected
     `,
     [
       owner_id,
@@ -551,6 +622,17 @@ async function get_expense_summary(
     summary.electricity_collected
   );
 
+  const service_collected = Number(
+    summary.service_collected
+  );
+
+  /*
+    Repairs charged to tenants and move-out deductions.
+  */
+  const repairs_collected = Number(
+    summary.repairs_collected
+  );
+
   const total_expenses = Number(
     summary.total_expenses
   );
@@ -563,13 +645,219 @@ async function get_expense_summary(
     rent_collected,
     water_collected,
     electricity_collected,
+    service_collected,
+    repairs_collected,
     total_expenses,
 
     net_profit:
       rent_collected +
       water_collected +
-      electricity_collected -
+      electricity_collected +
+      service_collected +
+      repairs_collected -
       total_expenses,
+  };
+}
+
+/*
+  Owners usually pay running costs first and recover them from
+  tenants. For each expense category this compares:
+
+  spent     expenses recorded in the period
+  charged   service charges, repairs and move-out deductions
+            billed to tenants for the period
+  paid      how much of that the tenants have paid so far
+
+  A monthly charge belongs to its billing month. A one-off
+  charge, a repair or a deduction belongs to the day it was
+  billed.
+*/
+async function get_expense_reconciliation(
+  user,
+  filters
+) {
+  const owner_id = get_owner_id(user);
+
+  const result = await db.query(
+    `
+      WITH spent AS (
+        SELECT
+          expenses.category,
+          SUM(expenses.amount) AS spent
+        FROM expenses
+        WHERE expenses.owner_id = $1
+          AND expenses.status = 'recorded'
+
+          AND (
+            $2::BIGINT IS NULL
+            OR expenses.property_id = $2
+          )
+
+          AND (
+            $3::DATE IS NULL
+            OR expenses.expense_date >= $3
+          )
+
+          AND (
+            $4::DATE IS NULL
+            OR expenses.expense_date <= $4
+          )
+
+          AND (
+            $5::BIGINT IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM property_caretaker_assignments
+              WHERE property_caretaker_assignments.property_id =
+                expenses.property_id
+                AND property_caretaker_assignments.caretaker_id = $5
+                AND property_caretaker_assignments.status = 'active'
+            )
+          )
+
+        GROUP BY expenses.category
+      ),
+
+      billed AS (
+        SELECT
+          CASE
+            WHEN tenant_charges.charge_type = 'service'
+              THEN COALESCE(
+                service_charges.category,
+                'other'
+              )
+            ELSE 'repairs_maintenance'
+          END AS category,
+
+          tenant_charges.amount_due,
+          tenant_charges.amount_paid,
+
+          CASE
+            WHEN tenant_charges.billing_period =
+              DATE '1970-01-01'
+              THEN (
+                tenant_charges.created_at
+                AT TIME ZONE 'Africa/Nairobi'
+              )::DATE
+            ELSE tenant_charges.billing_period
+          END AS billed_on
+
+        FROM tenant_charges
+
+        LEFT JOIN service_charges
+          ON tenant_charges.charge_type = 'service'
+          AND service_charges.id =
+            tenant_charges.source_id
+
+        WHERE tenant_charges.owner_id = $1
+          AND tenant_charges.charge_type IN (
+            'service',
+            'repair',
+            'deduction'
+          )
+          AND tenant_charges.status <> 'void'
+
+          AND (
+            $2::BIGINT IS NULL
+            OR tenant_charges.property_id = $2
+          )
+
+          AND (
+            $5::BIGINT IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM property_caretaker_assignments
+              WHERE property_caretaker_assignments.property_id =
+                tenant_charges.property_id
+                AND property_caretaker_assignments.caretaker_id = $5
+                AND property_caretaker_assignments.status = 'active'
+            )
+          )
+      ),
+
+      charged AS (
+        SELECT
+          category,
+          SUM(amount_due) AS charged,
+          SUM(amount_paid) AS paid
+        FROM billed
+        WHERE (
+            $3::DATE IS NULL
+            OR billed_on >= $3
+          )
+          AND (
+            $4::DATE IS NULL
+            OR billed_on <= $4
+          )
+        GROUP BY category
+      )
+
+      SELECT
+        COALESCE(spent.category, charged.category)
+          AS category,
+        COALESCE(spent.spent, 0) AS spent,
+        COALESCE(charged.charged, 0) AS charged,
+        COALESCE(charged.paid, 0) AS paid
+      FROM spent
+      FULL JOIN charged
+        ON charged.category = spent.category
+      ORDER BY 1
+    `,
+    [
+      owner_id,
+      filters.property_id || null,
+      filters.from_date || null,
+      filters.to_date || null,
+      user.role === "caretaker"
+        ? user.user_id
+        : null,
+    ]
+  );
+
+  const categories = result.rows.map((row) => {
+    const spent = Number(row.spent);
+    const charged = Number(row.charged);
+    const paid = Number(row.paid);
+
+    return {
+      category: row.category,
+      spent,
+      charged,
+      paid,
+
+      /*
+        Charged to tenants but not paid yet.
+      */
+      outstanding: charged - paid,
+
+      /*
+        What the owner carries: spent and not charged on.
+        Negative when tenants were charged more than was spent.
+      */
+      owner_cost: spent - charged,
+    };
+  });
+
+  const total = (field) =>
+    categories.reduce(
+      (sum, category) => sum + category[field],
+      0
+    );
+
+  return {
+    property_id: filters.property_id || null,
+    from_date: filters.from_date || null,
+    to_date: filters.to_date || null,
+
+    categories,
+
+    totals: {
+      spent: total("spent"),
+      charged: total("charged"),
+      paid: total("paid"),
+      outstanding: total("outstanding"),
+      owner_cost: total("owner_cost"),
+    },
   };
 }
 
@@ -579,4 +867,5 @@ module.exports = {
   get_expense_for_owner,
   void_expense,
   get_expense_summary,
+  get_expense_reconciliation,
 };
