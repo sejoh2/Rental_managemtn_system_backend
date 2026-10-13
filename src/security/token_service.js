@@ -46,6 +46,12 @@ function create_access_token(user) {
   );
 }
 
+/*
+  The administrator's session is deliberately short. The web
+  app keeps it only in the browser tab it was opened in, so
+  closing the tab signs the admin out; this limit makes sure a
+  session that was left behind cannot be renewed for long.
+*/
 function create_refresh_token(user) {
   return jwt.sign(
     {
@@ -54,7 +60,10 @@ function create_refresh_token(user) {
     },
     process.env.JWT_REFRESH_SECRET,
     {
-      expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || "30d",
+      expiresIn:
+        user.role === "admin"
+          ? process.env.ADMIN_REFRESH_TOKEN_EXPIRES_IN || "12h"
+          : process.env.REFRESH_TOKEN_EXPIRES_IN || "30d",
     }
   );
 }
