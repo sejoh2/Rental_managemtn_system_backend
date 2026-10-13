@@ -22,6 +22,13 @@ function is_database_busy(error) {
 function error_handler(error, req, res, next) {
   console.error("[ERROR]", error);
 
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({
+      success: false,
+      error: "That file is too large. The limit is 5 MB.",
+    });
+  }
+
   if (is_database_busy(error)) {
     return res.status(503).json({
       success: false,

@@ -43,6 +43,11 @@ function public_reading(reading) {
     billing_period: reading.billing_period,
     meter_number: reading.meter_number,
 
+    /*
+      A second reading taken when the tenant moved out.
+    */
+    is_final: Boolean(reading.is_final),
+
     previous_reading: Number(
       reading.previous_reading
     ),
@@ -205,6 +210,11 @@ function calculate_due_date(property, billing_period) {
     .slice(0, 10);
 }
 
+/*
+  A tenant normally has one water bill a month. additional is
+  for a final reading: the tenant is billed again, separately,
+  for the units used since their earlier reading that month.
+*/
 async function create_water_charge(
   client,
   {
@@ -212,6 +222,7 @@ async function create_water_charge(
     property,
     billing_period,
     amount,
+    additional = false,
   }
 ) {
   const result = await client.query(
@@ -224,11 +235,26 @@ async function create_water_charge(
         charge_type,
         billing_period,
         due_date,
-        amount_due
+        amount_due,
+        source_id,
+        description
       )
       VALUES (
         $1,$2,$3,$4,
-        'water',$5,$6,$7
+        'water',$5,$6,$7,
+        CASE
+          WHEN $8::BOOLEAN THEN (
+            SELECT COALESCE(MAX(source_id), 0) + 1
+            FROM tenant_charges
+            WHERE tenant_id = $1
+              AND charge_type = 'water'
+              AND billing_period = $5::DATE
+          )
+          ELSE 0
+        END,
+        CASE
+          WHEN $8::BOOLEAN THEN 'Water, final reading'
+        END
       )
       ON CONFLICT (
         tenant_id,
@@ -250,6 +276,7 @@ async function create_water_charge(
         billing_period
       ),
       amount,
+      additional,
     ]
   );
 
@@ -391,9 +418,11 @@ async function get_latest_reading_for_unit(
       SELECT *
       FROM water_meter_readings
       WHERE unit_id = $1
-        AND billing_period < $2
+        AND billing_period <= $2
         AND status = 'submitted'
-      ORDER BY billing_period DESC
+      ORDER BY
+        billing_period DESC,
+        id DESC
       LIMIT 1
     `,
     [unit_id, billing_period]
@@ -480,6 +509,51 @@ async function submit_meter_reading(
       throw error;
     }
 
+    /*
+      Each tenant is read once a month. A unit that changed
+      tenant in the month is read again for the new tenant, and
+      a tenant who is moving out may have one final reading on
+      top of their ordinary one.
+    */
+    const this_month = await client.query(
+      `
+        SELECT id, is_final
+        FROM water_meter_readings
+        WHERE unit_id = $1
+          AND billing_period = $2
+          AND tenant_id = $3
+          AND status <> 'rejected'
+      `,
+      [unit.id, billing_period, unit.tenant_id]
+    );
+
+    if (data.final_reading) {
+      if (!this_month.rows.length) {
+        const error = new Error(
+          `${unit.tenant_name} has no reading for this month yet, so record this as an ordinary reading.`
+        );
+
+        error.status_code = 422;
+        throw error;
+      }
+
+      if (this_month.rows.some((row) => row.is_final)) {
+        const error = new Error(
+          `A final reading has already been recorded for ${unit.tenant_name} this month.`
+        );
+
+        error.status_code = 409;
+        throw error;
+      }
+    } else if (this_month.rows.length) {
+      const error = new Error(
+        `${unit.tenant_name} already has a reading for this month. If they are moving out, record a final reading to bill what they have used since.`
+      );
+
+      error.status_code = 409;
+      throw error;
+    }
+
     const previous =
       await get_latest_reading_for_unit(
         client,
@@ -544,6 +618,7 @@ async function submit_meter_reading(
           property,
           billing_period,
           amount: bill_amount,
+          additional: data.final_reading,
         }
       );
 
@@ -562,17 +637,18 @@ async function submit_meter_reading(
     }
 
     /*
-      A unit has one reading per month. A reading that was
-      rejected is replaced by the new one.
+      A reading of this tenant that was rejected is replaced by
+      the new one.
     */
     await client.query(
       `
         DELETE FROM water_meter_readings
         WHERE unit_id = $1
           AND billing_period = $2
+          AND tenant_id = $3
           AND status = 'rejected'
       `,
-      [unit.id, billing_period]
+      [unit.id, billing_period, unit.tenant_id]
     );
 
     const reading_result = await client.query(
@@ -594,12 +670,14 @@ async function submit_meter_reading(
           status,
           flag_reason,
           tenant_charge_id,
-          submitted_by
+          submitted_by,
+          is_final
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,
           $7,$8,$9,$10,$11,
-          $12,$13,$14,$15,$16,$17
+          $12,$13,$14,$15,$16,$17,
+          $18
         )
         RETURNING *
       `,
@@ -623,6 +701,7 @@ async function submit_meter_reading(
           : null,
         charge?.id || null,
         owner.user_id,
+        Boolean(data.final_reading),
       ]
     );
 
@@ -643,6 +722,7 @@ async function submit_meter_reading(
         tenant_id: unit.tenant_id,
         billing_period,
         bill_amount,
+        final_reading: Boolean(data.final_reading),
       },
       ip_address,
     });
@@ -841,6 +921,7 @@ async function review_meter_reading(
         */
         billing_period: reading.billing_period_text,
         amount: bill_amount,
+        additional: Boolean(reading.is_final),
       }
     );
 

@@ -27,6 +27,7 @@ const report_routes = require("./src/reports/report_routes");
 const settings_routes = require("./src/settings/settings_routes");
 const admin_routes = require("./src/admin/admin_routes");
 const reminder_routes = require("./src/reminders/reminder_routes");
+const file_routes = require("./src/files/file_routes");
 
 const {
   not_found,
@@ -100,6 +101,7 @@ app.use("/api", sms_routes);
 app.use("/api", report_routes);
 app.use("/api", settings_routes);
 app.use("/api", reminder_routes);
+app.use("/api", file_routes);
 
 app.use(not_found);
 app.use(error_handler);

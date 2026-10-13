@@ -60,6 +60,9 @@ const {
   init_reminder_tables,
   start_payment_reminder_scheduler,
 } = require("./src/reminders/reminder_service");
+const {
+  init_file_tables,
+} = require("./src/files/file_service");
 
 
 function require_environment_variable(name) {
@@ -110,6 +113,7 @@ async function start_server() {
     await init_sms_tables();
     await init_settings_tables();
     await init_reminder_tables();
+    await init_file_tables();
 
     console.log("[PAYMENTS] Tables are ready.");
 

@@ -132,6 +132,22 @@ async function init_water_tables() {
     );
   `);
 
+  /*
+    A unit can now have more than one reading in a month: one
+    for each tenant who lived in it, and a final reading when
+    a tenant moves out. Who may be read, and when, is checked
+    in the service. Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE water_meter_readings
+      DROP CONSTRAINT IF EXISTS
+        water_meter_readings_unit_id_billing_period_key;
+
+    ALTER TABLE water_meter_readings
+      ADD COLUMN IF NOT EXISTS is_final BOOLEAN
+      NOT NULL DEFAULT FALSE;
+  `);
+
   console.log("[WATER] Tables initialized.");
 }
 

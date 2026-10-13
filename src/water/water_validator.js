@@ -88,6 +88,15 @@ const submit_reading_schema = z.object({
     .min(0)
     .optional(),
 
+  /*
+    A second reading for a tenant who was already read this
+    month, taken when they move out, so they are billed for
+    what they used since.
+  */
+  final_reading: z.boolean()
+    .optional()
+    .default(false),
+
   meter_photo_url: z.string()
     .url()
     .max(2000)

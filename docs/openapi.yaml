@@ -443,6 +443,71 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/files:
+    get:
+      tags: [Files]
+      summary: Files attached to a record
+      description: |
+        Owner only. `kind` is tenant_document, expense_receipt or
+        meter_photo, and `target_id` is the tenant, expense or water
+        reading. The record must belong to the owner.
+        GET /api/files/counts?kind=...&target_ids=1,2,3 returns how many
+        files each record has.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [tenant_document, expense_receipt, meter_photo]
+        - name: target_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Files, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+    post:
+      tags: [Files]
+      summary: Upload a file
+      description: |
+        Owner only. The request body is the file itself and the
+        Content-Type header is its type: JPG, PNG, WEBP or PDF, up to
+        5 MB, at most 20 files per record. The first bytes of the file
+        must match its type. `kind`, `target_id`, `name` (the file's
+        own name) and an optional `label` go in the query.
+        Files are kept in private storage. To open one, call
+        GET /api/files/{file_id}/link, which returns a link valid for
+        5 minutes; DELETE /api/files/{file_id} removes it. Uploading,
+        opening and deleting are written to the audit log.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/pdf:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The stored file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/properties/{property_id}/reminders:
     get:
       tags: [Step 12 - SMS Centre]
@@ -1408,6 +1473,18 @@ paths:
       description: |
         Owner, or the caretaker assigned to the property. A reading lower than the
         previous one is flagged and not billed until the owner corrects or rejects it.
+
+        The unit must be per-unit metered and have a tenant living in it.
+        The bill is the units used times the UNIT's own water rate; the
+        property's water settings are only the defaults a new unit starts
+        with.
+
+        Each tenant is read once per billing month. A unit that changed
+        tenant during the month can be read again for the new tenant, from
+        the unit's latest reading. `final_reading: true` records one extra
+        reading for a tenant already read that month, for when they move
+        out; it is billed as a separate water charge for the units used
+        since, and the reading carries `is_final`.
       security:
         - bearerAuth: []
       parameters:
