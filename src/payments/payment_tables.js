@@ -418,6 +418,27 @@ async function init_payment_tables() {
         )
       );
 
+    /*
+      'held' is a repair charge that waits for move-out: it is
+      owed, but it is not due and nothing may pay it while the
+      tenant still lives in the unit. Moving out turns it into
+      an ordinary open charge.
+    */
+    ALTER TABLE tenant_charges
+      DROP CONSTRAINT IF EXISTS tenant_charges_status_check;
+
+    ALTER TABLE tenant_charges
+      ADD CONSTRAINT tenant_charges_status_check
+      CHECK (
+        status IN (
+          'open',
+          'partial',
+          'paid',
+          'void',
+          'held'
+        )
+      );
+
     ALTER TABLE payments
       ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
 

@@ -369,10 +369,20 @@ function part_month_fraction_sql(date_sql) {
            move-in billing rule. Later months come from the
            monthly billing run.
   once     the full amount, a single time per tenant.
+
+  at_move_in: a tenant who moves in part-way through a month
+  is billed only the one-off charges on that day. Their monthly
+  service charges start with the next monthly billing run, on
+  the property's billing date. Moving in on the 1st is the
+  billing date itself, so the monthly charges are billed then.
 */
 async function bill_service_charges(
   client,
-  { tenant_id = null, service_charge_id = null }
+  {
+    tenant_id = null,
+    service_charge_id = null,
+    at_move_in = false,
+  }
 ) {
   const result = await client.query(
     `
@@ -435,6 +445,12 @@ async function bill_service_charges(
             $2::BIGINT IS NULL
             OR service_charges.id = $2
           )
+
+          AND (
+            $3::BOOLEAN IS NOT TRUE
+            OR service_charges.frequency = 'once'
+            OR EXTRACT(DAY FROM tenants.move_in_date) = 1
+          )
       ),
 
       amounts AS (
@@ -496,7 +512,7 @@ async function bill_service_charges(
       DO NOTHING
       RETURNING *
     `,
-    [tenant_id, service_charge_id]
+    [tenant_id, service_charge_id, at_move_in]
   );
 
   return result.rows;
@@ -666,7 +682,7 @@ async function create_move_in_charges(client, tenant_id) {
 
   const service_charges = await bill_service_charges(
     client,
-    { tenant_id }
+    { tenant_id, at_move_in: true }
   );
 
   return [

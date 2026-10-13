@@ -1432,6 +1432,13 @@ paths:
     get:
       tags: [Step 9 - Expenses]
       summary: List expenses
+      description: |
+        Each expense carries `recovery`: who carries the cost. `status` is
+        `owner_cost` (not charged to a tenant), `recovered` (charged and
+        paid in full), `pending` (charged, not fully paid) or `at_move_out`
+        (charged, to be deducted from the deposit at move-out), with
+        `tenant_name`, `charged`, `paid`, `pending` and `owner_cost`.
+        Only a repair from a maintenance request can be charged to a tenant.
       security:
         - bearerAuth: []
       parameters:
@@ -1726,6 +1733,10 @@ paths:
         service charges, repairs and deductions; the water deposit covers
         water; the electricity deposit covers electricity. After it is
         confirmed, `status` is `confirmed` and `settlement` holds the result.
+
+        `repairs` lists every repair charged to the tenant during the stay,
+        including those already paid, which `groups` does not show:
+        `amount`, `paid_during_stay`, `covered_at_move_out` and `unpaid`.
       security:
         - bearerAuth: []
       parameters:
@@ -3616,6 +3627,18 @@ components:
         priority:
           type: string
           enum: [low, normal, high, urgent]
+        charge_to_tenant:
+          type: boolean
+          default: false
+          description: |
+            Who pays, chosen when the issue is reported: false is the owner,
+            true is the tenant living in the unit (needs a unit_id). It can
+            be changed until the request is resolved with a cost.
+        charge_timing:
+          type: string
+          enum: [now, move_out]
+          default: now
+          description: See UpdateMaintenanceRequest.
 
     UpdateMaintenanceRequest:
       type: object
@@ -3647,6 +3670,16 @@ components:
             not told automatically; send the SMS with
             POST /api/maintenance/{request_id}/charge-sms.
             The cost cannot be changed afterwards.
+        charge_timing:
+          type: string
+          enum: [now, move_out]
+          description: |
+            How the tenant pays a repair charged to them. `now`: the charge
+            is open and is paid from the tenant's credit or next payment.
+            `move_out`: the charge is recorded with status `held`; it is
+            not counted as arrears and nothing pays it during the stay. When
+            the tenant moves out it becomes open and the rent deposit covers
+            it in the deposit reconciliation. Fixed once the cost is recorded.
         resolution_notes:
           type: string
           nullable: true

@@ -4,6 +4,52 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
+/*
+  Who carries an expense. Only a repair can be charged to one
+  tenant; other costs are recovered through service charges,
+  which the per-category figures show.
+
+  owner_cost   not charged to a tenant
+  recovered    charged to a tenant and paid in full
+  pending      charged to a tenant, not fully paid yet
+  at_move_out  charged to a tenant, to be deducted from the
+               deposit when they move out
+*/
+function expense_recovery(expense) {
+  const amount = Number(expense.amount);
+
+  if (!expense.charged_tenant_id) {
+    return {
+      status: "owner_cost",
+      tenant_id: null,
+      tenant_name: null,
+      charged: 0,
+      paid: 0,
+      pending: 0,
+      owner_cost: amount,
+    };
+  }
+
+  const charged = Number(expense.charged_amount);
+  const paid = Number(expense.charged_paid);
+
+  return {
+    status:
+      expense.charge_status === "held"
+        ? "at_move_out"
+        : paid >= charged
+          ? "recovered"
+          : "pending",
+
+    tenant_id: Number(expense.charged_tenant_id),
+    tenant_name: expense.charged_tenant_name,
+    charged,
+    paid,
+    pending: charged - paid,
+    owner_cost: amount - charged,
+  };
+}
+
 function public_expense(expense) {
   return {
     id: Number(expense.id),
@@ -30,6 +76,10 @@ function public_expense(expense) {
     maintenance_request_id: expense.maintenance_request_id
       ? Number(expense.maintenance_request_id)
       : null,
+
+    unit_number: expense.unit_number || null,
+
+    recovery: expense_recovery(expense),
 
     created_by: expense.created_by
       ? Number(expense.created_by)
@@ -223,12 +273,31 @@ async function list_expenses(user, filters) {
           users.first_name,
           ' ',
           users.last_name
-        ) AS created_by_name
+        ) AS created_by_name,
+
+        expense_unit.unit_number,
+
+        charged_tenant.id AS charged_tenant_id,
+        charged_tenant.full_name AS charged_tenant_name,
+        repair_charge.amount_due AS charged_amount,
+        repair_charge.amount_paid AS charged_paid,
+        repair_charge.status AS charge_status
       FROM expenses
       INNER JOIN properties
         ON properties.id = expenses.property_id
       INNER JOIN users
         ON users.user_id = expenses.created_by
+      LEFT JOIN units AS expense_unit
+        ON expense_unit.id = expenses.unit_id
+      LEFT JOIN maintenance_requests
+        ON maintenance_requests.id =
+          expenses.maintenance_request_id
+      LEFT JOIN tenant_charges AS repair_charge
+        ON repair_charge.id =
+          maintenance_requests.tenant_charge_id
+        AND repair_charge.status <> 'void'
+      LEFT JOIN tenants AS charged_tenant
+        ON charged_tenant.id = repair_charge.tenant_id
       WHERE expenses.owner_id = $1
 
         AND (
@@ -303,12 +372,31 @@ async function get_expense_for_owner(
           users.first_name,
           ' ',
           users.last_name
-        ) AS created_by_name
+        ) AS created_by_name,
+
+        expense_unit.unit_number,
+
+        charged_tenant.id AS charged_tenant_id,
+        charged_tenant.full_name AS charged_tenant_name,
+        repair_charge.amount_due AS charged_amount,
+        repair_charge.amount_paid AS charged_paid,
+        repair_charge.status AS charge_status
       FROM expenses
       INNER JOIN properties
         ON properties.id = expenses.property_id
       INNER JOIN users
         ON users.user_id = expenses.created_by
+      LEFT JOIN units AS expense_unit
+        ON expense_unit.id = expenses.unit_id
+      LEFT JOIN maintenance_requests
+        ON maintenance_requests.id =
+          expenses.maintenance_request_id
+      LEFT JOIN tenant_charges AS repair_charge
+        ON repair_charge.id =
+          maintenance_requests.tenant_charge_id
+        AND repair_charge.status <> 'void'
+      LEFT JOIN tenants AS charged_tenant
+        ON charged_tenant.id = repair_charge.tenant_id
       WHERE expenses.id = $1
         AND expenses.owner_id = $2
       LIMIT 1

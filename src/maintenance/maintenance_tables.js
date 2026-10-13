@@ -165,6 +165,23 @@ async function init_maintenance_tables() {
       ON DELETE SET NULL;
 
     /*
+      How a tenant pays a repair charged to them: 'now' (from
+      their credit or next payment) or 'move_out' (deducted
+      from the deposit when they leave).
+    */
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS charge_timing VARCHAR(20)
+      NOT NULL DEFAULT 'now';
+
+    ALTER TABLE maintenance_requests
+      DROP CONSTRAINT IF EXISTS
+        maintenance_requests_charge_timing_check;
+
+    ALTER TABLE maintenance_requests
+      ADD CONSTRAINT maintenance_requests_charge_timing_check
+      CHECK (charge_timing IN ('now', 'move_out'));
+
+    /*
       When the tenant was last sent an SMS about the charge.
       It is sent by hand, never automatically.
     */

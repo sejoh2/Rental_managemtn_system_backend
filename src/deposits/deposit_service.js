@@ -280,6 +280,74 @@ function final_figure(groups, credit) {
   };
 }
 
+/*
+  Every repair charged to the tenant during the stay. The
+  groups only list what is still unpaid, so a repair the tenant
+  already paid would otherwise not appear at move-out at all.
+*/
+async function load_repairs(client, tenant_id) {
+  const result = await client.query(
+    `
+      SELECT
+        tenant_charges.id,
+        tenant_charges.description,
+        tenant_charges.amount_due,
+        tenant_charges.amount_paid,
+
+        COALESCE(
+          (
+            SELECT SUM(deposit_applications.amount)
+            FROM deposit_applications
+            WHERE deposit_applications.tenant_charge_id =
+              tenant_charges.id
+          ),
+          0
+        ) AS at_move_out,
+
+        TO_CHAR(
+          (
+            tenant_charges.created_at
+            AT TIME ZONE 'Africa/Nairobi'
+          )::DATE,
+          'YYYY-MM-DD'
+        ) AS charged_on
+
+      FROM tenant_charges
+      WHERE tenant_charges.tenant_id = $1
+        AND tenant_charges.charge_type = 'repair'
+        AND tenant_charges.status <> 'void'
+      ORDER BY tenant_charges.id
+    `,
+    [tenant_id]
+  );
+
+  return result.rows.map((row) => {
+    const amount = money(row.amount_due);
+    const at_move_out = money(row.at_move_out);
+
+    return {
+      charge_id: Number(row.id),
+      description: row.description,
+      charged_on: row.charged_on,
+      amount,
+
+      /*
+        Paid by the tenant before the reconciliation, from a
+        payment or their credit.
+      */
+      paid_during_stay:
+        money(row.amount_paid) - at_move_out,
+
+      /*
+        Taken from the deposits or credit at move-out.
+      */
+      covered_at_move_out: at_move_out,
+
+      unpaid: amount - money(row.amount_paid),
+    };
+  });
+}
+
 function ensure_moved_out(tenant) {
   if (tenant.status !== "moved_out") {
     throw service_error(
@@ -301,6 +369,7 @@ async function get_reconciliation(owner, tenant_id) {
     return {
       status: "confirmed",
       settlement: public_settlement(settlement),
+      repairs: await load_repairs(db, tenant_id),
     };
   }
 
@@ -312,6 +381,7 @@ async function get_reconciliation(owner, tenant_id) {
     status: "open",
     groups: build_groups(position.charges),
     credit_held: position.credit,
+    repairs: await load_repairs(db, tenant_id),
   };
 }
 
@@ -350,6 +420,7 @@ async function calculate_reconciliation(
     status: "open",
     groups,
     credit_held: position.credit,
+    repairs: await load_repairs(db, tenant_id),
     deductions_total: sum(
       data.deductions,
       (deduction) => deduction.amount

@@ -25,6 +25,11 @@ const statuses = [
   "cancelled",
 ];
 
+const charge_timings = [
+  "now",
+  "move_out",
+];
+
 const create_request_schema = z.object({
   unit_id: z.coerce.number()
     .int()
@@ -48,6 +53,17 @@ const create_request_schema = z.object({
 
   priority: z.enum(priorities)
     .default("normal"),
+
+  /*
+    Who pays is chosen when the issue is reported and may be
+    changed until the cost is recorded. Nothing is charged
+    before the request is resolved with a cost.
+  */
+  charge_to_tenant: z.boolean()
+    .default(false),
+
+  charge_timing: z.enum(charge_timings)
+    .default("now"),
 });
 
 const update_request_schema = z.object({
@@ -84,6 +100,9 @@ const update_request_schema = z.object({
     in the unit when the request is resolved.
   */
   charge_to_tenant: z.boolean()
+    .optional(),
+
+  charge_timing: z.enum(charge_timings)
     .optional(),
 
   resolution_notes: z.string()

@@ -64,6 +64,11 @@ function public_request(request) {
     */
     charge_to_tenant: Boolean(request.charge_to_tenant),
 
+    /*
+      'now' or 'move_out'. Only matters when the tenant pays.
+    */
+    charge_timing: request.charge_timing || "now",
+
     expense_id: request.expense_id
       ? Number(request.expense_id)
       : null,
@@ -271,6 +276,15 @@ async function create_request(
 
     const owner_id = get_owner_id(user);
 
+    if (data.charge_to_tenant && !unit) {
+      const error = new Error(
+        "This repair is not in a unit, so its cost cannot be charged to a tenant."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+
     const result = await client.query(
       `
         INSERT INTO maintenance_requests (
@@ -282,11 +296,14 @@ async function create_request(
           category,
           priority,
           reported_by,
-          reporter_role
+          reporter_role,
+          charge_to_tenant,
+          charge_timing
         )
         VALUES (
           $1,$2,$3,$4,$5,
-          $6,$7,$8,$9
+          $6,$7,$8,$9,
+          $10,$11
         )
         RETURNING *
       `,
@@ -300,6 +317,8 @@ async function create_request(
         data.priority,
         user.user_id,
         user.role,
+        Boolean(data.charge_to_tenant),
+        data.charge_timing || "now",
       ]
     );
 
@@ -318,6 +337,8 @@ async function create_request(
         category: request.category,
         priority: request.priority,
         reporter_role: user.role,
+        charge_to_tenant: request.charge_to_tenant,
+        charge_timing: request.charge_timing,
       },
       ip_address,
     });
@@ -623,6 +644,9 @@ async function record_repair_cost(client, user, request) {
   let tenant = null;
   let charge = null;
 
+  const at_move_out =
+    request.charge_timing === "move_out";
+
   if (request.charge_to_tenant) {
     const tenant_result = await client.query(
       `
@@ -674,7 +698,8 @@ async function record_repair_cost(client, user, request) {
           due_date,
           amount_due,
           description,
-          source_id
+          source_id,
+          status
         )
         VALUES (
           $1,$2,$3,$4,
@@ -684,7 +709,7 @@ async function record_repair_cost(client, user, request) {
             CURRENT_TIMESTAMP
             AT TIME ZONE 'Africa/Nairobi'
           )::DATE,
-          $5,$6,$7
+          $5,$6,$7,$8
         )
         RETURNING *
       `,
@@ -696,12 +721,20 @@ async function record_repair_cost(client, user, request) {
         request.actual_cost,
         `Repair: ${request.title}`.slice(0, 255),
         request.id,
+        at_move_out ? "held" : "open",
       ]
     );
 
     charge = charge_result.rows[0];
 
-    await apply_tenant_credits(client, tenant.id);
+    /*
+      A repair kept for move-out is not paid from the tenant's
+      credit or payments. It becomes payable when they move
+      out, where the rent deposit covers it.
+    */
+    if (!at_move_out) {
+      await apply_tenant_credits(client, tenant.id);
+    }
   }
 
   await client.query(
@@ -851,7 +884,11 @@ async function send_repair_charge_sms(
     property_id: request.property_id,
     tenant,
     template_name: "Repair charge",
-    message: `Dear ${tenant.full_name.split(" ")[0]}, a repair at House ${tenant.unit_number} (${request.title}) has been charged to your account: KES ${amount}. Please include it in your next payment. ${tenant.property_name}`,
+    message: `Dear ${tenant.full_name.split(" ")[0]}, a repair at House ${tenant.unit_number} (${request.title}) has been charged to your account: KES ${amount}. ${
+      charge.status === "held"
+        ? "It will be deducted from your deposit when you move out."
+        : "Please include it in your next payment."
+    } ${tenant.property_name}`,
   });
 
   if (sms.status === "accepted") {
@@ -985,7 +1022,10 @@ async function update_request(
           Number(existing.actual_cost)) ||
         (data.charge_to_tenant !== undefined &&
           data.charge_to_tenant !==
-            existing.charge_to_tenant))
+            existing.charge_to_tenant) ||
+        (data.charge_timing !== undefined &&
+          data.charge_timing !==
+            existing.charge_timing))
     ) {
       const error = new Error(
         "The cost of this repair has already been recorded as an expense, so it can no longer be changed here."
@@ -1050,6 +1090,11 @@ async function update_request(
             charge_to_tenant
           ),
 
+          charge_timing = COALESCE(
+            $17::VARCHAR,
+            charge_timing
+          ),
+
           resolved_at = CASE
             WHEN $1 = 'resolved'
             THEN CURRENT_TIMESTAMP
@@ -1108,6 +1153,8 @@ async function update_request(
         existing.id,
 
         data.charge_to_tenant ?? null,
+
+        data.charge_timing ?? null,
       ]
     );
 

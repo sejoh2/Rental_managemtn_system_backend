@@ -775,6 +775,21 @@ async function move_out_tenant(
         data.move_out_date
       );
 
+    /*
+      Repairs that were kept for move-out are now due, so the
+      deposit reconciliation can cover them and a tenant who
+      still owes can pay them.
+    */
+    await client.query(
+      `
+        UPDATE tenant_charges
+        SET status = 'open'
+        WHERE tenant_id = $1
+          AND status = 'held'
+      `,
+      [tenant_id]
+    );
+
     await client.query("COMMIT");
 
     const updated_tenant =
