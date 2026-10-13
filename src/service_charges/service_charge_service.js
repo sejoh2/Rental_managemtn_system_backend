@@ -302,9 +302,20 @@ async function create_service_charge(
       data.unit_amounts
     );
 
-    const billed = await bill_service_charges(client, {
-      service_charge_id: charge.id,
-    });
+    /*
+      The owner may let a monthly charge start with the next
+      monthly billing run instead of billing the tenants who
+      live there now for the rest of this month.
+    */
+    const wait_for_billing =
+      charge.frequency === "monthly" &&
+      data.first_billing === "next_billing";
+
+    const billed = wait_for_billing
+      ? []
+      : await bill_service_charges(client, {
+          service_charge_id: charge.id,
+        });
 
     const tenant_ids = [
       ...new Set(billed.map((row) => row.tenant_id)),
@@ -336,6 +347,9 @@ async function create_service_charge(
         frequency: charge.frequency,
         amount: charge.amount,
         unit_amounts: data.unit_amounts,
+        first_billing: wait_for_billing
+          ? "next_billing"
+          : "now",
         ...billing,
       },
       ip_address,

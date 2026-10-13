@@ -511,8 +511,9 @@ async function logout(refresh_token, ip_address) {
 
 /*
   Saves the name a person gives after their first sign-in.
-  The first word is the first name and the rest is the last
-  name; one word leaves the last name empty.
+  The first word is the first name and the last word is the
+  last name, so a middle name is dropped. One word leaves the
+  last name empty.
 */
 async function set_name(user, full_name, ip_address) {
   if (!token_service.needs_name(user)) {
@@ -529,7 +530,10 @@ async function set_name(user, full_name, ip_address) {
     .split(/\s+/);
 
   const first_name = parts[0];
-  const last_name = parts.slice(1).join(" ");
+  const last_name =
+    parts.length > 1
+      ? parts[parts.length - 1]
+      : "";
 
   const result = await db.query(
     `

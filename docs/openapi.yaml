@@ -169,8 +169,9 @@ paths:
       description: |
         An account created by OTP is called "New User" and its
         `needs_name` is true until the person gives their name here.
-        The first word becomes the first name and the rest the last name;
-        one word leaves the last name empty. Allowed only while
+        The first word becomes the first name and the last word the last
+        name, so a middle name is dropped; one word leaves the last name
+        empty. Allowed only while
         `needs_name` is true (409 afterwards; an owner changes their name
         in Settings). Written to the audit log as PROFILE_NAME_SET.
       security:
@@ -3559,6 +3560,18 @@ components:
         frequency:
           type: string
           enum: [monthly, once]
+        first_billing:
+          type: string
+          enum: [now, next_billing]
+          default: now
+          description: |
+            Monthly charges only. `now` bills the tenants living in the
+            property for the rest of this month, under the property's
+            mid-month rule. `next_billing` bills nobody now; the charge
+            starts with the next monthly billing run. A one-off charge is
+            always billed now. A tenant who moves in part-way through a
+            month is billed one-off charges that day and monthly charges
+            from the next monthly billing run.
         amount:
           type: number
           example: 300

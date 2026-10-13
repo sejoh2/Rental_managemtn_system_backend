@@ -34,6 +34,15 @@ const create_service_charge_schema = z.object({
 
   frequency: z.enum(["monthly", "once"]),
 
+  /*
+    For a monthly charge, when the tenants already living in
+    the property are first billed: 'now' for the rest of this
+    month, or 'next_billing' to start with the next monthly
+    billing run. A one-off charge is always billed now.
+  */
+  first_billing: z.enum(["now", "next_billing"])
+    .default("now"),
+
   amount: z.coerce.number()
     .min(0),
 
