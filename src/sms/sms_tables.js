@@ -1,5 +1,9 @@
 const db = require("../config/db");
 
+const {
+  init_sender_approval_tables,
+} = require("./sender_approval_service");
+
 async function init_sms_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS sms_templates (
@@ -222,6 +226,8 @@ async function init_sms_tables() {
         DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  await init_sender_approval_tables();
 
   console.log("[SMS] SMS Centre tables initialized.");
 }

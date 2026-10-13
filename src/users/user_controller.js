@@ -2,7 +2,64 @@ const user_service = require("./user_service");
 
 const {
   validate_user_id,
+  validate_create_owner,
+  validate_update_user,
 } = require("./user_validator");
+
+async function create_owner(req, res, next) {
+  try {
+    const user = await user_service.create_owner({
+      admin_user: req.user,
+      data: validate_create_owner(req.body),
+      ip_address: req.ip,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Owner added.",
+      data: user,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function update_user(req, res, next) {
+  try {
+    const user = await user_service.update_user({
+      admin_user: req.user,
+      target_user_id: validate_user_id(req.params),
+      data: validate_update_user(req.body),
+      ip_address: req.ip,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "User updated.",
+      data: user,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function demote_owner(req, res, next) {
+  try {
+    const user = await user_service.demote_owner({
+      admin_user: req.user,
+      target_user_id: validate_user_id(req.params),
+      ip_address: req.ip,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "The owner is now a normal user.",
+      data: user,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
 
 async function list_users(req, res, next) {
   try {
@@ -113,6 +170,9 @@ async function activate_user(req, res, next) {
 }
 
 module.exports = {
+  create_owner,
+  update_user,
+  demote_owner,
   list_users,
   get_user,
   promote_to_owner,

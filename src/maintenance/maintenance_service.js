@@ -12,6 +12,10 @@ const {
   send_single_sms,
 } = require("../sms/sms_service");
 
+const {
+  effective_sender_sql,
+} = require("../sms/sender_approval_service");
+
 function public_request(request) {
   return {
     id: Number(request.id),
@@ -654,7 +658,7 @@ async function record_repair_cost(client, user, request) {
           tenants.*,
           units.unit_number,
           properties.name AS property_name,
-          properties.sms_sender_id
+          ${effective_sender_sql} AS sms_sender_id
         FROM tenants
         INNER JOIN units
           ON units.id = tenants.unit_id
@@ -848,7 +852,7 @@ async function send_repair_charge_sms(
           tenants.*,
           units.unit_number,
           properties.name AS property_name,
-          properties.sms_sender_id
+          ${effective_sender_sql} AS sms_sender_id
         FROM tenants
         INNER JOIN units
           ON units.id = tenants.unit_id

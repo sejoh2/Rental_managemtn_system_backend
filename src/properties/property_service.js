@@ -12,6 +12,10 @@ const {
 } = require("../audit/audit_service");
 
 const {
+  sync_property_sender,
+} = require("../sms/sender_approval_service");
+
+const {
   get_access_token,
   register_c2b_urls,
 } = require("../payments/mpesa/daraja_c2b_client");
@@ -64,6 +68,16 @@ function public_property(
       property.water_missed_reading_action,
 
     sms_sender_id: property.sms_sender_id,
+
+    /*
+      'pending', 'approved' or 'rejected' for the owner's own
+      sender ID; null when the property uses the default. Only
+      an approved sender ID is used for sending.
+    */
+    sms_sender_status: property.sms_sender_id
+      ? property.sms_sender_status || "pending"
+      : null,
+
     status: property.status,
 
     rent_account:
@@ -625,6 +639,12 @@ async function create_property(owner, data, ip_address) {
       ip_address,
     });
 
+    await sync_property_sender(
+      owner.user_id,
+      property_id,
+      ip_address
+    );
+
     return get_property_by_id(owner, property_id);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -728,6 +748,14 @@ async function update_property(
     metadata: { updated_fields },
     ip_address,
   });
+
+  if (updated_fields.includes("sms_sender_id")) {
+    await sync_property_sender(
+      owner.user_id,
+      property_id,
+      ip_address
+    );
+  }
 
   return get_property_by_id(owner, property_id);
 }

@@ -155,7 +155,7 @@ async function send_reading_reminders() {
         properties.name,
         properties.rent_due_day,
         properties.water_billing_day,
-        properties.sms_sender_id,
+        ${effective_sender_sql} AS sms_sender_id,
 
         caretakers.user_id AS caretaker_id,
         caretakers.first_name,

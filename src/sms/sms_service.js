@@ -4,6 +4,10 @@ const {
   send_sms,
 } = require("../utils/sms_provider");
 
+const {
+  effective_sender_sql,
+} = require("./sender_approval_service");
+
 function get_sms_cost() {
   const cost = Number(
     process.env.SMS_COST_PER_MESSAGE || 1.5
@@ -318,7 +322,7 @@ async function find_recipients(
         units.unit_number,
 
         properties.name AS property_name,
-        properties.sms_sender_id,
+        ${effective_sender_sql} AS sms_sender_id,
 
         financials.balance,
         financials.credit_balance,

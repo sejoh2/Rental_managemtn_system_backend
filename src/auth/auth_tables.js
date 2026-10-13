@@ -221,6 +221,60 @@ async function seed_admin_user() {
     ]
   );
 
+  /*
+    There is exactly one administrator: the number in
+    ADMIN_PHONE. No screen or endpoint can make another one,
+    and any other account found with the admin role (for
+    example after ADMIN_PHONE was changed) loses it here and
+    is signed out everywhere.
+  */
+  const removed = await db.query(
+    `
+      UPDATE users
+      SET role = 'user'
+      WHERE role = 'admin'
+        AND phone <> $1
+      RETURNING user_id, phone
+    `,
+    [phone]
+  );
+
+  for (const user of removed.rows) {
+    await db.query(
+      `
+        UPDATE refresh_tokens
+        SET revoked_at = CURRENT_TIMESTAMP
+        WHERE user_id = $1
+          AND revoked_at IS NULL
+      `,
+      [user.user_id]
+    );
+
+    await db.query(
+      `
+        INSERT INTO audit_logs (
+          user_id,
+          action,
+          entity_type,
+          entity_id,
+          metadata
+        )
+        VALUES (NULL, 'ADMIN_ROLE_REMOVED', 'user', $1, $2)
+      `,
+      [
+        user.user_id,
+        JSON.stringify({
+          phone: user.phone,
+          reason: "Not the ADMIN_PHONE set on the server.",
+        }),
+      ]
+    );
+
+    console.warn(
+      `[AUTH] Removed the admin role from user ${user.user_id}: only ADMIN_PHONE may be the administrator.`
+    );
+  }
+
   console.log("[AUTH] Administrator verified.");
 }
 

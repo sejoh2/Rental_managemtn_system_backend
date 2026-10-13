@@ -17,6 +17,15 @@ router.use(require_role("admin"));
 
 router.get("/", user_controller.list_users);
 
+router.post("/", user_controller.create_owner);
+
+router.patch("/:user_id", user_controller.update_user);
+
+router.post(
+  "/:user_id/demote-owner",
+  user_controller.demote_owner
+);
+
 router.get("/:user_id", user_controller.get_user);
 
 router.post(

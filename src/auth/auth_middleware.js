@@ -4,6 +4,16 @@ const {
   get_user_by_id,
 } = require("./auth_service");
 
+const {
+  run_as_admin,
+} = require("../audit/acting_context");
+
+/*
+  The admin's own pages. The acting-owner header is ignored
+  here, so the admin stays an admin on them.
+*/
+const admin_own_paths = /^\/api\/(auth|users|admin)(\/|\?|$)/;
+
 async function authenticate(req, res, next) {
   try {
     const authorization = req.headers.authorization;
@@ -31,6 +41,46 @@ async function authenticate(req, res, next) {
     }
 
     req.user = user;
+
+    /*
+      A system admin may open any owner's account. The request
+      then runs as that owner, so every owner screen and rule
+      works unchanged, while the audit log records the admin
+      as the person who acted.
+    */
+    const acting_owner_id = Number(
+      req.headers["x-acting-owner-id"]
+    );
+
+    if (
+      user.role === "admin" &&
+      acting_owner_id &&
+      !admin_own_paths.test(req.originalUrl)
+    ) {
+      const owner = await get_user_by_id(acting_owner_id);
+
+      if (!owner || owner.role !== "owner") {
+        return res.status(404).json({
+          success: false,
+          error: "Owner account not found.",
+        });
+      }
+
+      req.admin = user;
+
+      req.user = {
+        ...owner,
+        acting_admin_id: user.user_id,
+      };
+
+      return run_as_admin(
+        {
+          admin_id: user.user_id,
+          owner_id: owner.user_id,
+        },
+        next
+      );
+    }
 
     return next();
   } catch {

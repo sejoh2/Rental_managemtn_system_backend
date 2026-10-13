@@ -1,5 +1,9 @@
 const db = require("../config/db");
 
+const {
+  get_acting_admin,
+} = require("./acting_context");
+
 /*
   Records who did what, to which record, in which owner account.
 
@@ -18,6 +22,24 @@ async function log_audit({
   metadata = null,
   ip_address = null,
 }) {
+  /*
+    An admin working inside an owner's account: the admin is
+    the one who acted, in that owner's account.
+  */
+  const acting = get_acting_admin();
+
+  if (
+    acting &&
+    String(user_id) === String(acting.owner_id)
+  ) {
+    user_id = acting.admin_id;
+    owner_id = owner_id || acting.owner_id;
+    metadata = {
+      ...(metadata || {}),
+      by_admin: true,
+    };
+  }
+
   await db.query(
     `
       INSERT INTO audit_logs (

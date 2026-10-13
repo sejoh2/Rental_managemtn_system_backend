@@ -199,7 +199,279 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
 
+  /api/admin/overview:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: Platform overview for the admin
+      description: |
+        Admin only. `totals` across the platform and one row per owner
+        account in `owners`: properties, units, current tenants,
+        caretakers, payments matched this month and SMS accepted this
+        month with their cost. Months are Kenyan time.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/owners/{owner_id}/open:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Open an owner's account as admin
+      description: |
+        Admin only. Records ADMIN_OPENED_ACCOUNT in the audit log and
+        returns the owner. To then work inside that account, the admin
+        sends the header `X-Acting-Owner-Id: <owner_id>` on any owner
+        endpoint: the request runs as that owner, with every owner
+        permission, and each change is audited with the admin as the
+        actor, the owner as the account and `by_admin: true` in the
+        metadata. The header is ignored on /api/auth, /api/users and
+        /api/admin, and for anyone who is not an admin.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: owner_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The owner whose account was opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/owners/{owner_id}:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: One owner account, read-only
+      description: |
+        Admin only. The owner, totals (including money collected this
+        month and what tenants owe), their properties, caretakers and the
+        latest audit entries of the account.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: owner_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Owner account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/notifications:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: What is waiting for the admin
+      description: |
+        Admin only. Sender IDs waiting for approval, people waiting to be
+        made an owner, and sign-in activity in the last 24 hours that
+        looks like guessing: 5 or more wrong codes for one number
+        (`failed_sign_ins`), 8 or more codes requested for one number
+        (`code_requests`), or any wrong code for the admin's own number
+        (`admin_sign_in_failed`).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/system:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: Safe facts about the server setup
+      description: |
+        Admin only. SMS mode, whether the SMS provider account is set,
+        the default sender ID, sign-in code rules, and whether the payment
+        callback address is HTTPS. Never returns a key, secret, password
+        or database address.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/sms-usage:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: SMS sent this month through the platform's sender
+      description: |
+        Admin only. Per owner: messages, accepted, failed and cost, for
+        messages sent with the platform's default sender. Messages sent
+        with an owner's own approved sender ID are not included.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SMS usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/sender-ids:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: Sender IDs owners have entered
+      description: |
+        Admin only. An owner's own sender ID on a property is used only
+        after the admin approves it; until then, and if it is rejected,
+        that property's messages go from the default sender. A sender ID
+        is approved once per owner. The property carries
+        `sms_sender_status`: pending, approved or rejected.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sender ID requests, pending first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/sender-ids/{request_id}/review:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Approve or reject a sender ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approved, rejected]
+                note:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: The reviewed request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/audit-logs/{log_id}:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: One audit entry in full
+      description: |
+        Admin only. `log` is the entry with its actor, account, record,
+        details and IP address. `related` holds up to 30 other entries
+        about the same record, newest first.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: log_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The entry and related entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/admin/audit-logs/export:
+    get:
+      tags: [Step 2 - Admin users]
+      summary: Download the audit log as CSV
+      description: |
+        Admin only. Same filters as the list, up to 5,000 rows, newest
+        first. The download is itself audited as AUDIT_LOG_EXPORTED.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: CSV file
+
+  /api/users/{user_id}/demote-owner:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Turn an owner back into a normal user
+      description: |
+        Admin only. Refused with 409 while the owner still has
+        properties; deactivate such an account instead.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The user, now with the role user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/users:
+    post:
+      tags: [Step 2 - Admin users]
+      summary: Add an owner by name and phone number
+      description: |
+        Admin only. Body: `full_name`, `phone`. The person signs in with
+        that number; nothing is sent to them. There is exactly one
+        administrator, the ADMIN_PHONE set on the server: no endpoint can
+        create another, and PATCH /api/users/{user_id} (`full_name`,
+        `phone`) refuses to change the administrator.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name, phone]
+              properties:
+                full_name: { type: string, example: Joseph Kamau }
+                phone: { type: string, example: "0712345678" }
+      responses:
+        "201":
+          description: Owner added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
     get:
       tags: [Step 2 - Admin users]
       summary: List all users
