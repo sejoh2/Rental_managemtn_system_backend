@@ -77,6 +77,15 @@ router.post(
   water_controller.generate_fixed_monthly_bills
 );
 
+/*
+  Owner only: correcting a reading changes the tenant's bill.
+*/
+router.patch(
+  "/water-readings/:reading_id",
+  guard,
+  water_controller.edit_meter_reading
+);
+
 router.patch(
   "/water-readings/:reading_id/review",
   guard,

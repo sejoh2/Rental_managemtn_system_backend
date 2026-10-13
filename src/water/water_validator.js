@@ -130,6 +130,29 @@ const review_reading_schema = z.object({
     .optional(),
 });
 
+const edit_reading_schema = z.object({
+  previous_reading: z.coerce.number()
+    .min(0)
+    .optional(),
+
+  current_reading: z.coerce.number()
+    .min(0)
+    .optional(),
+
+  notes: z.string()
+    .trim()
+    .max(5000)
+    .nullable()
+    .optional(),
+}).refine(
+  (data) =>
+    data.previous_reading !== undefined ||
+    data.current_reading !== undefined,
+  {
+    message: "Enter the corrected reading.",
+  }
+);
+
 const generate_fixed_bills_schema = z.object({
   billing_period: z.string().date(),
 });
@@ -214,6 +237,13 @@ module.exports = {
       list_readings_schema,
       data,
       "Water reading filters are invalid."
+    ),
+
+  validate_edit_reading: (data) =>
+    validate(
+      edit_reading_schema,
+      data,
+      "Water meter-reading data is invalid."
     ),
 
   validate_property_id: (value) =>

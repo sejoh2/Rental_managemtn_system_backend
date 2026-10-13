@@ -1493,6 +1493,16 @@ paths:
         water used while the unit stood empty, but a value below the last
         recorded reading is refused with 422. A unit's first reading must
         send it.
+
+        PATCH /api/water-readings/{reading_id} (owner only) corrects a
+        submitted reading: `previous_reading`, `current_reading`, `notes`.
+        Only a unit's newest reading can be edited (`can_edit` on the
+        list), and not one whose bill was settled from a deposit at
+        move-out. The bill is recalculated at the rate it was billed at;
+        anything the tenant had paid above the new bill returns to them as
+        credit (`returned_as_credit`), and a higher bill leaves the
+        difference owed. Audited as WATER_METER_READING_EDITED with the
+        figures before and after.
       security:
         - bearerAuth: []
       parameters:
