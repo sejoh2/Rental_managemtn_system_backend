@@ -4,6 +4,7 @@ const {
   validate_create_tenant,
   validate_update_tenant,
   validate_move_out,
+  validate_undo_move_out,
   validate_list_tenants,
   validate_property_id,
   validate_tenant_id,
@@ -147,7 +148,28 @@ async function move_out_tenant(req, res, next) {
   }
 }
 
+async function undo_move_out(req, res, next) {
+  try {
+    const tenant = await tenant_service.undo_move_out(
+      req.user,
+      validate_tenant_id(req.params.tenant_id),
+      validate_undo_move_out(req.body),
+      req.ip
+    );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "The move-out was undone. The tenant lives in the unit again.",
+      data: tenant,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  undo_move_out,
   create_tenant,
   list_property_tenants,
   list_tenants,

@@ -86,6 +86,12 @@ router.patch(
   water_controller.edit_meter_reading
 );
 
+router.post(
+  "/water-readings/:reading_id/cancel",
+  guard,
+  water_controller.cancel_meter_reading
+);
+
 router.patch(
   "/water-readings/:reading_id/review",
   guard,

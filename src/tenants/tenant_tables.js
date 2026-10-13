@@ -144,6 +144,16 @@ async function init_tenant_tables() {
       ALTER COLUMN water_deposit_due SET DEFAULT 0;
   `);
 
+  /*
+    What the tenant's bills looked like just before they were
+    moved out, so the move-out can be undone exactly.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE tenants
+      ADD COLUMN IF NOT EXISTS move_out_snapshot JSONB;
+  `);
+
   console.log("[TENANTS] Tenants table initialized.");
 }
 

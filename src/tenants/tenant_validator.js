@@ -73,6 +73,13 @@ const update_tenant_schema = z.object({
   }
 );
 
+const undo_move_out_schema = z.object({
+  reason: z.string()
+    .trim()
+    .min(3, "Say why the move-out is being undone.")
+    .max(500),
+});
+
 const move_out_schema = z.object({
   move_out_date: z.string()
     .date(),
@@ -150,6 +157,9 @@ module.exports = {
 
   validate_move_out: (data) =>
     validate(move_out_schema, data),
+
+  validate_undo_move_out: (data) =>
+    validate(undo_move_out_schema, data),
 
   validate_property_id: (value) =>
     validate_id(value, "property"),

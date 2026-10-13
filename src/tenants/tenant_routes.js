@@ -68,4 +68,10 @@ router.post(
   tenant_controller.move_out_tenant
 );
 
+router.post(
+  "/tenants/:tenant_id/undo-move-out",
+  guard,
+  tenant_controller.undo_move_out
+);
+
 module.exports = router;

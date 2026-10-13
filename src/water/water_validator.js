@@ -153,6 +153,13 @@ const edit_reading_schema = z.object({
   }
 );
 
+const cancel_reading_schema = z.object({
+  reason: z.string()
+    .trim()
+    .min(3, "Say why the reading is being cancelled.")
+    .max(500),
+});
+
 const generate_fixed_bills_schema = z.object({
   billing_period: z.string().date(),
 });
@@ -244,6 +251,13 @@ module.exports = {
       edit_reading_schema,
       data,
       "Water meter-reading data is invalid."
+    ),
+
+  validate_cancel_reading: (data) =>
+    validate(
+      cancel_reading_schema,
+      data,
+      "Give a reason for cancelling the reading."
     ),
 
   validate_property_id: (value) =>

@@ -5,6 +5,7 @@ const {
   validate_submit_reading,
   validate_review_reading,
   validate_edit_reading,
+  validate_cancel_reading,
   validate_generate_fixed_bills,
   validate_list_readings,
   validate_property_id,
@@ -91,6 +92,26 @@ async function submit_meter_reading(
           ? "Meter reading saved and flagged for review."
           : "Meter reading submitted and water bill created successfully.",
       data: reading,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function cancel_meter_reading(req, res, next) {
+  try {
+    const result =
+      await water_service.cancel_meter_reading(
+        req.user,
+        validate_reading_id(req.params.reading_id),
+        validate_cancel_reading(req.body),
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Meter reading and its bill cancelled.",
+      data: result,
     });
   } catch (error) {
     next(error);
@@ -233,6 +254,7 @@ async function get_water_stats(req, res, next) {
 }
 
 module.exports = {
+  cancel_meter_reading,
   edit_meter_reading,
   get_previous_reading,
   update_water_rules,

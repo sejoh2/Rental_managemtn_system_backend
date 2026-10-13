@@ -15,6 +15,7 @@ const {
 const {
   create_move_in_charges,
   adjust_move_out_charges,
+  apply_tenant_credits,
 } = require("../billing/billing_service");
 
 const {
@@ -765,6 +766,40 @@ async function move_out_tenant(
     );
 
     /*
+      The bills as they are now, kept so that the move-out can
+      be undone: the steps below change the last month's bills
+      and release repairs that were waiting for move-out.
+    */
+    const charges_before = await client.query(
+      `
+        SELECT id, amount_due, amount_paid, status
+        FROM tenant_charges
+        WHERE tenant_id = $1
+          AND status <> 'void'
+        ORDER BY id
+      `,
+      [tenant_id]
+    );
+
+    await client.query(
+      `
+        UPDATE tenants
+        SET move_out_snapshot = $1::JSONB
+        WHERE id = $2
+      `,
+      [
+        JSON.stringify(
+          charges_before.rows.map((charge) => ({
+            id: Number(charge.id),
+            amount_due: Number(charge.amount_due),
+            status: charge.status,
+          }))
+        ),
+        tenant_id,
+      ]
+    );
+
+    /*
       Settles the final month according to the property's
       move-out billing rule and voids any later charges.
     */
@@ -824,7 +859,267 @@ async function move_out_tenant(
   }
 }
 
+/*
+  Puts back a tenant who was moved out by mistake: they live in
+  the unit again and their bills return to what they were just
+  before the move-out.
+
+  Refused when their deposits have been reconciled (reopen that
+  first), when someone else now lives in the unit, or when the
+  unit has been taken out of use. Months that passed while they
+  were moved out are not billed afterwards.
+*/
+async function undo_move_out(
+  owner,
+  tenant_id,
+  data,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const tenant_result = await client.query(
+      `
+        SELECT
+          tenants.*,
+          units.unit_number,
+          units.status AS unit_status
+        FROM tenants
+        INNER JOIN units
+          ON units.id = tenants.unit_id
+        WHERE tenants.id = $1
+          AND tenants.owner_id = $2
+        FOR UPDATE OF tenants, units
+      `,
+      [tenant_id, owner.user_id]
+    );
+
+    const tenant = tenant_result.rows[0];
+
+    function refuse(message, status_code = 409) {
+      const error = new Error(message);
+
+      error.status_code = status_code;
+      throw error;
+    }
+
+    if (!tenant) {
+      refuse(
+        "Tenant not found or you do not have access to them.",
+        404
+      );
+    }
+
+    if (tenant.status !== "moved_out") {
+      refuse("This tenant has not been moved out.", 400);
+    }
+
+    const settlement = await client.query(
+      `
+        SELECT 1
+        FROM deposit_settlements
+        WHERE tenant_id = $1
+      `,
+      [tenant_id]
+    );
+
+    if (settlement.rows[0]) {
+      refuse(
+        "This tenant's deposits have been reconciled. Reopen the reconciliation first, then undo the move-out."
+      );
+    }
+
+    if (tenant.unit_status === "occupied") {
+      refuse(
+        `House ${tenant.unit_number} now has another tenant, so this move-out can no longer be undone.`
+      );
+    }
+
+    if (tenant.unit_status === "inactive") {
+      refuse(
+        `House ${tenant.unit_number} is marked "Not in use". Restore it first.`
+      );
+    }
+
+    const snapshot = tenant.move_out_snapshot;
+
+    if (!Array.isArray(snapshot)) {
+      /*
+        Moved out before the bills were kept. That is only
+        safe to undo when the move-out changed no bill.
+      */
+      const earlier = await client.query(
+        `
+          SELECT metadata
+          FROM audit_logs
+          WHERE action = 'TENANT_MOVED_OUT'
+            AND entity_id = $1
+          ORDER BY audit_log_id DESC
+          LIMIT 1
+        `,
+        [tenant_id]
+      );
+
+      const adjustments =
+        earlier.rows[0]?.metadata?.charge_adjustments;
+
+      if (!Array.isArray(adjustments) || adjustments.length) {
+        refuse(
+          "This tenant was moved out before undo was available and their last bills were changed, so it cannot be undone automatically. Add them again as a new tenant."
+        );
+      }
+    }
+
+    let charges_restored = 0;
+
+    for (const before of snapshot || []) {
+      const current_result = await client.query(
+        `
+          SELECT amount_due, amount_paid, status
+          FROM tenant_charges
+          WHERE id = $1
+            AND tenant_id = $2
+          FOR UPDATE
+        `,
+        [before.id, tenant_id]
+      );
+
+      const current = current_result.rows[0];
+
+      if (
+        !current ||
+        (Number(current.amount_due) === before.amount_due &&
+          current.status === before.status)
+      ) {
+        continue;
+      }
+
+      /*
+        Money released when the bill was reduced became credit;
+        it settles the restored bill again further down.
+      */
+      const paid = Math.min(
+        current.status === "void"
+          ? 0
+          : Number(current.amount_paid),
+        before.amount_due
+      );
+
+      await client.query(
+        `
+          UPDATE tenant_charges
+          SET
+            amount_due = $1,
+            amount_paid = $2,
+            status = $3
+          WHERE id = $4
+        `,
+        [
+          before.amount_due,
+          paid,
+          before.status === "held" && paid === 0
+            ? "held"
+            : paid >= before.amount_due
+              ? "paid"
+              : paid > 0
+                ? "partial"
+                : "open",
+          before.id,
+        ]
+      );
+
+      charges_restored += 1;
+    }
+
+    /*
+      Repairs that wait for move-out wait again, also for a
+      tenant moved out before the bills were kept.
+    */
+    await client.query(
+      `
+        UPDATE tenant_charges
+        SET status = 'held'
+        FROM maintenance_requests
+        WHERE maintenance_requests.tenant_charge_id =
+          tenant_charges.id
+          AND maintenance_requests.charge_timing = 'move_out'
+          AND tenant_charges.tenant_id = $1
+          AND tenant_charges.status = 'open'
+          AND tenant_charges.amount_paid = 0
+      `,
+      [tenant_id]
+    );
+
+    await client.query(
+      `
+        UPDATE tenants
+        SET
+          status = 'active',
+          moved_out_at = NULL,
+          move_out_date = NULL,
+          move_out_reason = NULL,
+          deposit_refund_decision = NULL,
+          move_out_snapshot = NULL
+        WHERE id = $1
+      `,
+      [tenant_id]
+    );
+
+    await client.query(
+      `
+        UPDATE units
+        SET status = 'occupied'
+        WHERE id = $1
+      `,
+      [tenant.unit_id]
+    );
+
+    await apply_tenant_credits(client, tenant_id);
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "TENANT_MOVE_OUT_UNDONE",
+      entity_type: "tenant",
+      entity_id: tenant_id,
+      metadata: {
+        property_id: Number(tenant.property_id),
+        unit_id: Number(tenant.unit_id),
+        unit_number: tenant.unit_number,
+        reason: data.reason,
+        charges_restored,
+      },
+      ip_address,
+    });
+
+    return get_tenant_by_id(owner, tenant_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    if (
+      error.code === "23505" &&
+      error.constraint ===
+        "uq_active_payment_phone_per_property"
+    ) {
+      const duplicate_error = new Error(
+        "Another tenant in this property now uses this tenant's payment number. Change one of them first."
+      );
+
+      duplicate_error.status_code = 409;
+      throw duplicate_error;
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
+  undo_move_out,
   create_tenant,
   list_property_tenants,
   list_tenants,

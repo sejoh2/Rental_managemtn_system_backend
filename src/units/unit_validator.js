@@ -17,6 +17,20 @@ const unit_types = [
   "other",
 ];
 
+/*
+  The usual types are stored by their short name; a type the
+  owner typed is stored as they wrote it.
+*/
+const unit_type_field = z.string()
+  .trim()
+  .min(2, "The unit type is too short.")
+  .max(50, "The unit type is too long.")
+  .transform((value) =>
+    unit_types.includes(value.toLowerCase())
+      ? value.toLowerCase()
+      : value.replace(/\s+/g, " ")
+  );
+
 const editable_statuses = [
   "vacant",
   "reserved",
@@ -30,7 +44,10 @@ const editable_statuses = [
 const create_unit_schema = z.object({
   unit_number: z.string().trim().min(1).max(100),
 
-  unit_type: z.enum(unit_types).default("other"),
+  /*
+    One of the usual types above, or the owner's own wording.
+  */
+  unit_type: unit_type_field.default("other"),
 
   block_or_floor: z.string()
     .trim()
@@ -141,7 +158,7 @@ const update_unit_schema = z.object({
     .max(100)
     .optional(),
 
-  unit_type: z.enum(unit_types).optional(),
+  unit_type: unit_type_field.optional(),
 
   block_or_floor: z.string()
     .trim()

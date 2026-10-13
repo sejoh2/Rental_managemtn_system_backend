@@ -162,6 +162,16 @@ async function init_unit_tables() {
       );
   `);
 
+  /*
+    A unit's type is no longer limited to a fixed list: the
+    owner can type their own, such as "Single room".
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE units
+      DROP CONSTRAINT IF EXISTS units_unit_type_check;
+  `);
+
   console.log("[UNITS] Units table initialized.");
 }
 

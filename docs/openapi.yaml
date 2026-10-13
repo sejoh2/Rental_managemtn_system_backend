@@ -1197,6 +1197,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/TenantResponse"
 
+  /api/tenants/{tenant_id}/undo-move-out:
+    post:
+      tags: [Step 5 - Tenants]
+      summary: Undo a move-out
+      description: |
+        Owner only. Puts back a tenant who was moved out by mistake: they
+        are `active` in the unit again, the unit is `occupied`, and their
+        bills return to what they were just before the move-out (kept in
+        `tenants.move_out_snapshot`): a reduced last month is charged in
+        full again, voided later bills are open again, repairs waiting for
+        move-out are `held` again, and credit is applied again. Months
+        that passed while they were moved out are not billed.
+
+        Refused with 409 when the deposits have been reconciled (reopen
+        the reconciliation first), when the unit has another tenant, when
+        the unit is not in use, or when the tenant was moved out before
+        snapshots were kept and that move-out changed a bill.
+        Audited as TENANT_MOVE_OUT_UNDONE.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                  example: Moved out the wrong tenant
+      responses:
+        "200":
+          description: Move-out undone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+        "409":
+          description: It can no longer be undone
+
   /api/payments:
     get:
       tags: [Step 6 - Payments]
@@ -1496,13 +1541,25 @@ paths:
 
         PATCH /api/water-readings/{reading_id} (owner only) corrects a
         submitted reading: `previous_reading`, `current_reading`, `notes`.
-        Only a unit's newest reading can be edited (`can_edit` on the
-        list), and not one whose bill was settled from a deposit at
-        move-out. The bill is recalculated at the rate it was billed at;
+        Any submitted reading can be edited, from any month (`can_edit`
+        on the list), except one whose bill was settled from a deposit at
+        move-out (409: reopen the reconciliation first). The previous
+        reading cannot go below the reading before it, and the current
+        reading cannot go above where the unit's next reading starts
+        (422). The bill is recalculated at the rate it was billed at;
         anything the tenant had paid above the new bill returns to them as
         credit (`returned_as_credit`), and a higher bill leaves the
         difference owed. Audited as WATER_METER_READING_EDITED with the
         figures before and after.
+
+        POST /api/water-readings/{reading_id}/cancel (owner only, body
+        `reason`, 3 to 500 characters) cancels a submitted reading and its
+        bill. What the tenant had paid towards the bill returns to them as
+        credit. The reading stays listed with status `rejected` and notes
+        starting "Cancelled:", and a new reading can be recorded for the
+        same tenant and month (the cancelled bill is opened again with the
+        new amount). Refused with 409 when the bill was settled from a
+        deposit. Audited as WATER_METER_READING_CANCELLED.
       security:
         - bearerAuth: []
       parameters:
@@ -1549,6 +1606,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/water-readings/{reading_id}/cancel:
+    post:
+      tags: [Step 7 - Water billing]
+      summary: Cancel a water reading and its bill
+      description: |
+        Owner only. See "Submit water reading" for the rules.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reading_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                  example: Recorded for the wrong house
+      responses:
+        "200":
+          description: Reading and bill cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+                  data:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      status: { type: string, example: rejected }
+                      returned_as_credit: { type: number, example: 800 }
+        "409":
+          description: The bill was settled from a deposit at move-out
 
   /api/water-readings/{reading_id}/review:
     patch:
@@ -3618,7 +3720,13 @@ components:
         unit_number: { type: string, example: A1 }
         unit_type:
           type: string
-          enum: [bedsitter, studio, one_bedroom, two_bedroom, three_bedroom, shop, office, other]
+          minLength: 2
+          maxLength: 50
+          description: |
+            One of the usual types (bedsitter, studio, one_bedroom,
+            two_bedroom, three_bedroom, shop, office, other) or the owner's
+            own wording, stored as typed, such as "Single room".
+          example: Single room
         block_or_floor:
           type: string
           nullable: true

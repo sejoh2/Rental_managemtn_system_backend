@@ -93,8 +93,8 @@ function public_reading(reading) {
     bill_status: reading.bill_status || null,
 
     /*
-      Whether the reading can still be edited: it is the
-      unit's newest and its bill was not settled from a
+      Whether the reading can still be edited or cancelled:
+      it is submitted and its bill was not settled from a
       deposit at move-out. Present on list responses.
     */
     can_edit: Boolean(reading.can_edit),
@@ -275,7 +275,12 @@ async function create_water_charge(
         billing_period,
         source_id
       )
-      DO NOTHING
+      DO UPDATE SET
+        amount_due = EXCLUDED.amount_due,
+        due_date = EXCLUDED.due_date,
+        status = 'open'
+      WHERE tenant_charges.status = 'void'
+        AND tenant_charges.amount_paid = 0
       RETURNING *
     `,
     [
@@ -448,10 +453,11 @@ async function get_latest_reading_for_unit(
   Corrects a reading that was typed in wrongly, and its bill
   with it.
 
-  Only a unit's newest reading can be edited, because the next
-  reading starts from it. The previous reading still cannot go
-  below the reading before it, and the current reading cannot
-  be below the previous one.
+  Any submitted reading can be edited, as long as it stays in
+  line with the readings around it: the previous reading
+  cannot go below the reading before it, the current reading
+  cannot be below the previous one, and it cannot go above
+  where the next reading of the unit starts.
 
   The bill follows the new figures at the rate it was billed
   at. If the tenant had paid more than the new bill, the excess
@@ -507,9 +513,13 @@ async function edit_meter_reading(
       throw error;
     }
 
-    const newer = await client.query(
+    /*
+      The reading after this one, if there is one, starts from
+      a figure that this reading must not pass.
+    */
+    const next_result = await client.query(
       `
-        SELECT 1
+        SELECT previous_reading
         FROM water_meter_readings
         WHERE unit_id = $1
           AND id <> $2
@@ -518,6 +528,9 @@ async function edit_meter_reading(
             billing_period > $3::DATE
             OR (billing_period = $3::DATE AND id > $2)
           )
+        ORDER BY
+          billing_period ASC,
+          id ASC
         LIMIT 1
       `,
       [
@@ -527,14 +540,9 @@ async function edit_meter_reading(
       ]
     );
 
-    if (newer.rows[0]) {
-      const error = new Error(
-        "Only the newest reading of a unit can be edited, because the next reading starts from it."
-      );
-
-      error.status_code = 409;
-      throw error;
-    }
+    const next_starts_from = next_result.rows[0]
+      ? Number(next_result.rows[0].previous_reading)
+      : null;
 
     const before_result = await client.query(
       `
@@ -588,6 +596,18 @@ async function edit_meter_reading(
     if (current_reading < previous_reading) {
       const error = new Error(
         "The current reading cannot be lower than the previous reading."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+
+    if (
+      next_starts_from !== null &&
+      current_reading > next_starts_from
+    ) {
+      const error = new Error(
+        `The current reading cannot be higher than ${next_starts_from}, where the next reading of this unit starts. Edit that reading first.`
       );
 
       error.status_code = 422;
@@ -773,6 +793,180 @@ async function edit_meter_reading(
 
     return {
       ...public_reading(updated.rows[0]),
+      returned_as_credit: credit_returned,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/*
+  Cancels a reading that should not have been recorded, and
+  its bill. What the tenant had paid towards the bill goes back
+  to them as credit. The reading stays on the list as rejected,
+  and a new one can then be recorded in its place.
+*/
+async function cancel_meter_reading(
+  owner,
+  reading_id,
+  data,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const reading_result = await client.query(
+      `
+        SELECT
+          water_meter_readings.*,
+          TO_CHAR(
+            water_meter_readings.billing_period,
+            'YYYY-MM-DD'
+          ) AS billing_period_text
+        FROM water_meter_readings
+        WHERE id = $1
+          AND owner_id = $2
+        FOR UPDATE
+      `,
+      [reading_id, owner.user_id]
+    );
+
+    const reading = reading_result.rows[0];
+
+    if (!reading) {
+      const error = new Error(
+        "Water meter reading not found."
+      );
+
+      error.status_code = 404;
+      throw error;
+    }
+
+    if (reading.status !== "submitted") {
+      const error = new Error(
+        reading.status === "flagged"
+          ? "This reading is flagged. Use Correct reading to fix or reject it."
+          : "This reading has already been cancelled."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    let credit_returned = 0;
+
+    if (reading.tenant_charge_id) {
+      const charge_result = await client.query(
+        `
+          SELECT *
+          FROM tenant_charges
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [reading.tenant_charge_id]
+      );
+
+      const charge = charge_result.rows[0];
+
+      if (charge) {
+        const settled = await client.query(
+          `
+            SELECT 1
+            FROM deposit_applications
+            WHERE tenant_charge_id = $1
+            LIMIT 1
+          `,
+          [charge.id]
+        );
+
+        if (settled.rows[0]) {
+          const error = new Error(
+            "This bill was settled from the tenant's deposit when they moved out. Reopen their deposit reconciliation first."
+          );
+
+          error.status_code = 409;
+          throw error;
+        }
+
+        const paid =
+          charge.status === "void"
+            ? 0
+            : Number(charge.amount_paid);
+
+        if (paid > 0) {
+          await release_charge_payments(client, charge, paid);
+          credit_returned = paid;
+        }
+
+        await client.query(
+          `
+            UPDATE tenant_charges
+            SET
+              amount_paid = 0,
+              status = 'void'
+            WHERE id = $1
+          `,
+          [charge.id]
+        );
+      }
+    }
+
+    await client.query(
+      `
+        UPDATE water_meter_readings
+        SET
+          status = 'rejected',
+          tenant_charge_id = NULL,
+          notes = $1,
+          reviewed_by = $2,
+          reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+      `,
+      [
+        `Cancelled: ${data.reason}`,
+        owner.user_id,
+        reading.id,
+      ]
+    );
+
+    if (reading.tenant_id) {
+      await apply_tenant_credits(client, reading.tenant_id);
+    }
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "WATER_METER_READING_CANCELLED",
+      entity_type: "water_meter_reading",
+      entity_id: reading.id,
+      metadata: {
+        property_id: Number(reading.property_id),
+        unit_id: Number(reading.unit_id),
+        tenant_id: reading.tenant_id
+          ? Number(reading.tenant_id)
+          : null,
+        billing_period: reading.billing_period_text,
+        previous_reading: Number(reading.previous_reading),
+        current_reading: Number(reading.current_reading),
+        bill_amount: Number(reading.bill_amount),
+        tenant_charge_id: reading.tenant_charge_id
+          ? Number(reading.tenant_charge_id)
+          : null,
+        returned_as_credit: credit_returned,
+        reason: data.reason,
+      },
+      ip_address,
+    });
+
+    return {
+      id: Number(reading.id),
+      status: "rejected",
       returned_as_credit: credit_returned,
     };
   } catch (error) {
@@ -1580,23 +1774,6 @@ async function list_readings(
 
             AND NOT EXISTS (
               SELECT 1
-              FROM water_meter_readings AS newer
-              WHERE newer.unit_id =
-                water_meter_readings.unit_id
-                AND newer.status <> 'rejected'
-                AND (
-                  newer.billing_period >
-                    water_meter_readings.billing_period
-                  OR (
-                    newer.billing_period =
-                      water_meter_readings.billing_period
-                    AND newer.id > water_meter_readings.id
-                  )
-                )
-            )
-
-            AND NOT EXISTS (
-              SELECT 1
               FROM deposit_applications
               WHERE deposit_applications.tenant_charge_id =
                 water_meter_readings.tenant_charge_id
@@ -1748,6 +1925,7 @@ module.exports = {
   update_water_rules,
   get_previous_reading,
   edit_meter_reading,
+  cancel_meter_reading,
   submit_meter_reading,
   review_meter_reading,
   generate_fixed_monthly_bills,
