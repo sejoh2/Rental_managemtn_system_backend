@@ -205,6 +205,17 @@ async function list_files(owner, kind, target_id) {
   records. -> { "<target_id>": count }
 */
 async function count_files(owner, kind, target_ids) {
+  /*
+    A caretaker counts only in the properties they look after.
+  */
+  const caretaker_id =
+    owner.role === "caretaker" ? owner.user_id : null;
+
+  const account_id =
+    owner.role === "caretaker"
+      ? owner.owner_id
+      : owner.user_id;
+
   if (!kinds[kind]) {
     throw service_error("Unknown kind of file.", 422);
   }
@@ -217,9 +228,19 @@ async function count_files(owner, kind, target_ids) {
         AND kind = $2
         AND target_id = ANY($3::BIGINT[])
         AND deleted_at IS NULL
+        AND (
+          $4::BIGINT IS NULL
+          OR property_id IN (
+            SELECT property_id
+            FROM property_caretaker_assignments
+            WHERE caretaker_id = $4
+              AND owner_id = $1
+              AND status = 'active'
+          )
+        )
       GROUP BY target_id
     `,
-    [owner.user_id, kind, target_ids]
+    [account_id, kind, target_ids, caretaker_id]
   );
 
   return Object.fromEntries(
@@ -342,7 +363,7 @@ async function upload_file(
         content_type,
         body.length,
         storage_key,
-        owner.user_id,
+        owner.acting_caretaker_id || owner.user_id,
       ]
     );
 
@@ -464,6 +485,8 @@ async function delete_file(owner, file_id, ip_address) {
 module.exports = {
   MAX_BYTES,
   kinds,
+  get_target_or_throw,
+  get_file_or_throw,
   init_file_tables,
   list_files,
   count_files,

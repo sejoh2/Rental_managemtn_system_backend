@@ -448,7 +448,11 @@ paths:
       tags: [Files]
       summary: Files attached to a record
       description: |
-        Owner only. `kind` is tenant_document, expense_receipt or
+        Owner, or a caretaker assigned to the record's property.
+        A caretaker may list, upload and open files; tenant documents
+        need level 2; deleting a file is owner only. A file a caretaker
+        uploads carries them as `uploaded_by`.
+        `kind` is tenant_document, expense_receipt or
         meter_photo, and `target_id` is the tenant, expense or water
         reading. The record must belong to the owner.
         GET /api/files/counts?kind=...&target_ids=1,2,3 returns how many
@@ -2489,6 +2493,91 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/caretaker/properties:
+    get:
+      tags: [Step 11 - Caretakers]
+      summary: The properties the signed-in caretaker looks after
+      description: |
+        Caretaker only. Where the caretaker app starts.
+
+        What a caretaker may then use, in a property they are assigned to:
+        GET /api/properties/{property_id}/units (with current tenant and
+        balance), tenants (level 1 view, level 2 add and edit), water
+        readings (record, correct, cancel, resolve a flagged one),
+        expenses, maintenance, electricity bills, files (see /api/files),
+        and POST /api/tenants/{tenant_id}/payments/manual when
+        `can_record_payments` is on. Their actions are in the audit log
+        under their own name with `by_caretaker: true`.
+
+        Sending twice: any POST, PUT, PATCH or DELETE may carry an
+        `Idempotency-Key` header (16 to 100 letters, digits, hyphens or
+        underscores, one per thing being saved). The first request is
+        carried out; a repeat with the same key returns the first answer
+        with the header `Idempotent-Replay: true` and changes nothing.
+        A refused request frees its key. The same key on a different
+        address is refused with 422; a repeat while the first is still
+        running gets 409.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Properties
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        location: { type: string }
+                        rent_due_day: { type: integer }
+                        water_billing_method: { type: string }
+                        water_rate_per_unit: { type: number, nullable: true }
+                        water_fixed_fee: { type: number, nullable: true }
+                        total_units: { type: integer }
+                        occupied_units: { type: integer }
+                        permission_level: { type: string, enum: [level_1, level_2] }
+                        can_manage_tenants: { type: boolean }
+                        can_record_payments: { type: boolean }
+
+  /api/properties/{property_id}/caretaker/payment-permission:
+    put:
+      tags: [Step 11 - Caretakers]
+      summary: Allow or stop the property's caretaker recording payments
+      description: |
+        Owner only. Off for every new assignment, also when a caretaker
+        is put back on a property. Audited as
+        CARETAKER_PAYMENT_PERMISSION_CHANGED. `can_record_payments` is
+        also on each row of GET /api/caretakers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allowed]
+              properties:
+                allowed: { type: boolean }
+      responses:
+        "200":
+          description: Permission saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "404":
+          description: The property has no caretaker
 
   /api/caretakers:
     get:

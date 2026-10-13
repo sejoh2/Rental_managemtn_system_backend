@@ -2,6 +2,7 @@ const db = require("../config/db");
 
 const {
   get_acting_admin,
+  get_acting_caretaker,
 } = require("./acting_context");
 
 /*
@@ -37,6 +38,24 @@ async function log_audit({
     metadata = {
       ...(metadata || {}),
       by_admin: true,
+    };
+  }
+
+  /*
+    A caretaker using one of the owner's actions: the caretaker
+    is the one who acted, in their owner's account.
+  */
+  const caretaker = get_acting_caretaker();
+
+  if (
+    caretaker &&
+    String(user_id) === String(caretaker.owner_id)
+  ) {
+    user_id = caretaker.caretaker_id;
+    owner_id = owner_id || caretaker.owner_id;
+    metadata = {
+      ...(metadata || {}),
+      by_caretaker: true,
     };
   }
 

@@ -37,6 +37,7 @@ function public_caretaker(row) {
     permission_label: permission_label(
       row.permission_level
     ),
+    can_record_payments: row.can_record_payments === true,
 
     assignment_status: row.assignment_status,
     user_status: row.user_status,
@@ -283,6 +284,7 @@ async function assign_caretaker(
         DO UPDATE SET
           permission_level =
             EXCLUDED.permission_level,
+          can_record_payments = FALSE,
           status = 'active',
           assigned_at = CURRENT_TIMESTAMP,
           unassigned_at = NULL
@@ -358,6 +360,7 @@ async function list_caretakers(owner) {
         properties.name AS property_name,
 
         property_caretaker_assignments.permission_level,
+        property_caretaker_assignments.can_record_payments,
 
         property_caretaker_assignments.status
           AS assignment_status,

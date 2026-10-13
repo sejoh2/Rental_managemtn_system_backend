@@ -38,6 +38,10 @@ const {
 } = require("./src/maintenance/maintenance_tables");const {
   init_caretaker_tables,
 } = require("./src/caretakers/caretaker_tables");
+
+const {
+  init_idempotency_tables,
+} = require("./src/middleware/idempotency");
 const {
   init_agreement_tables,
 } = require("./src/agreements/agreement_tables");
@@ -109,6 +113,7 @@ async function start_server() {
     await init_expense_tables();
     await init_maintenance_tables();
     await init_caretaker_tables();
+    await init_idempotency_tables();
     await init_agreement_tables();
     await init_sms_tables();
     await init_settings_tables();

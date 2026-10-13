@@ -10,6 +10,11 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+  property_in_path,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
 
 
@@ -28,9 +33,19 @@ const guard = [
   require_role("owner"),
 ];
 
+/*
+  The owner, or the caretaker assigned to the property. Adding
+  and changing units stays with the owner.
+*/
+const list_guard = [
+  authenticate,
+  require_role("owner", "caretaker"),
+  as_owner({ property: property_in_path }),
+];
+
 router.get(
   "/properties/:property_id/units",
-  guard,
+  list_guard,
   unit_controller.list_property_units
 );
 

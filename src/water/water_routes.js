@@ -12,6 +12,11 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+  property_of_record,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
 
 
@@ -39,6 +44,21 @@ const guard = [
 const reading_guard = [
   authenticate,
   require_role("owner", "caretaker"),
+];
+
+/*
+  Correcting, cancelling and resolving a reading: the owner, or
+  the caretaker assigned to the reading's property (the user's
+  decision, 2026-10-13). The same rules apply to both.
+*/
+const reading_change_guard = [
+  ...reading_guard,
+  as_owner({
+    property: property_of_record(
+      "water_meter_readings",
+      "reading_id"
+    ),
+  }),
 ];
 
 router.put(
@@ -82,19 +102,19 @@ router.post(
 */
 router.patch(
   "/water-readings/:reading_id",
-  guard,
+  reading_change_guard,
   water_controller.edit_meter_reading
 );
 
 router.post(
   "/water-readings/:reading_id/cancel",
-  guard,
+  reading_change_guard,
   water_controller.cancel_meter_reading
 );
 
 router.patch(
   "/water-readings/:reading_id/review",
-  guard,
+  reading_change_guard,
   water_controller.review_meter_reading
 );
 

@@ -46,6 +46,17 @@ async function init_caretaker_tables() {
       );
   `);
 
+  /*
+    Whether the owner lets this property's caretaker record
+    payments handed to them. Off unless the owner turns it on.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE property_caretaker_assignments
+      ADD COLUMN IF NOT EXISTS can_record_payments BOOLEAN
+        NOT NULL DEFAULT FALSE;
+  `);
+
   console.log("[CARETAKERS] Tables initialized.");
 }
 

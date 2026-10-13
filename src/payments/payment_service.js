@@ -921,7 +921,7 @@ async function record_manual_payment(
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,'manual',
           $8,COALESCE($9, CURRENT_TIMESTAMP),
-          'matched','manual',$1,$10
+          'matched','manual',$11,$10
         )
         RETURNING *
       `,
@@ -936,6 +936,10 @@ async function record_manual_payment(
         data.reference || null,
         data.received_at || null,
         data.notes || null,
+        /*
+          Who recorded it: the caretaker, when one did.
+        */
+        owner.acting_caretaker_id || owner.user_id,
       ]
     );
 

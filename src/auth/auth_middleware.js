@@ -8,6 +8,10 @@ const {
   run_as_admin,
 } = require("../audit/acting_context");
 
+const {
+  idempotency,
+} = require("../middleware/idempotency");
+
 /*
   The admin's own pages. The acting-owner header is ignored
   here, so the admin stays an admin on them.
@@ -41,6 +45,22 @@ async function authenticate(req, res, next) {
     }
 
     req.user = user;
+
+    /*
+      A repeat of a request that was already carried out (same
+      Idempotency-Key) is answered here and goes no further.
+    */
+    let proceed;
+
+    try {
+      proceed = await idempotency(req, res, user.user_id);
+    } catch (error) {
+      return next(error);
+    }
+
+    if (!proceed) {
+      return undefined;
+    }
 
     /*
       A system admin may open any owner's account. The request

@@ -17,10 +17,35 @@ function run_as_admin(context, callback) {
   owner's account; undefined otherwise.
 */
 function get_acting_admin() {
-  return storage.getStore();
+  const acting = storage.getStore();
+
+  return acting && acting.admin_id ? acting : undefined;
+}
+
+/*
+  A caretaker may use some of the owner's actions in a property
+  they are assigned to (see caretakers/caretaker_acting.js).
+  The request then runs as the owner, and this holds who the
+  caretaker is, so the audit log records them as the person who
+  acted.
+*/
+function run_as_caretaker(context, callback) {
+  return storage.run(context, callback);
+}
+
+/*
+  { caretaker_id, owner_id } during such a request; undefined
+  otherwise.
+*/
+function get_acting_caretaker() {
+  const acting = storage.getStore();
+
+  return acting && acting.caretaker_id ? acting : undefined;
 }
 
 module.exports = {
   run_as_admin,
   get_acting_admin,
+  run_as_caretaker,
+  get_acting_caretaker,
 };

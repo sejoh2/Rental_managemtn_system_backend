@@ -30,6 +30,17 @@ router.post(
   Only owners may create, connect, view, or archive their properties.
 */
 router.use(authenticate);
+
+/*
+  A caretaker has nothing on this router, but other routers
+  serve paths that start the same way, such as
+  /api/properties/:property_id/tenants. A caretaker is passed
+  on to them instead of being refused here.
+*/
+router.use((req, res, next) =>
+  req.user.role === "caretaker" ? next("router") : next()
+);
+
 router.use(require_role("owner"));
 
 router.post(

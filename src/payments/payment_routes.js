@@ -10,6 +10,11 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+  property_of_record,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
 
 /*
@@ -85,9 +90,24 @@ router.get(
   payment_controller.list_tenant_payments
 );
 
+/*
+  A payment handed over in person: the owner, or the property's
+  caretaker when the owner has allowed it for that property.
+*/
+const manual_payment_guard = [
+  authenticate,
+  require_role("owner", "caretaker"),
+  as_owner({
+    property: property_of_record("tenants", "tenant_id"),
+    permission: "can_record_payments",
+    permission_message:
+      "The owner has not allowed you to record payments for this property.",
+  }),
+];
+
 router.post(
   "/tenants/:tenant_id/payments/manual",
-  guard,
+  manual_payment_guard,
   payment_controller.record_manual_payment
 );
 

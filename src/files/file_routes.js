@@ -11,6 +11,10 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
 
 /*
@@ -76,6 +80,69 @@ function validate(schema, data) {
   return result.data;
 }
 
+/*
+  Attaching and opening files: the owner, or a caretaker in a
+  property they are assigned to. Deleting stays with the owner,
+  so proof cannot be removed by the person it is about.
+
+  Tenant documents are personal papers; among caretakers only
+  one who may manage tenants (level 2) reaches them.
+*/
+const staff = [
+  authenticate,
+  require_role("owner", "caretaker"),
+];
+
+function level_for(kind) {
+  return kind === "tenant_document" ? "level_2" : "level_1";
+}
+
+/*
+  For a request that names the record: ?kind=&target_id=
+*/
+const record_guard = [
+  ...staff,
+  as_owner({
+    property: async (req, owner_id) => {
+      const { kind, target_id } = validate(
+        target_schema,
+        req.query
+      );
+
+      const target = await file_service.get_target_or_throw(
+        { user_id: owner_id },
+        kind,
+        target_id
+      );
+
+      return {
+        property_id: target.property_id,
+        level: level_for(kind),
+      };
+    },
+  }),
+];
+
+/*
+  For a request that names the file: /files/:file_id/...
+*/
+const file_guard = [
+  ...staff,
+  as_owner({
+    property: async (req, owner_id) => {
+      const file = await file_service.get_file_or_throw(
+        { user_id: owner_id },
+        file_id_or_throw(req.params.file_id)
+      );
+
+      return {
+        property_id: file.property_id,
+        level: level_for(file.kind),
+      };
+    },
+  }),
+];
+
 function file_id_or_throw(value) {
   const result = id_field.safeParse(value);
 
@@ -104,7 +171,7 @@ function respond(handler, status = 200) {
 
 router.get(
   "/files",
-  guard,
+  record_guard,
   respond((req) => {
     const { kind, target_id } = validate(
       target_schema,
@@ -117,7 +184,7 @@ router.get(
 
 router.get(
   "/files/counts",
-  guard,
+  staff,
   respond((req) => {
     const { kind, target_ids } = validate(
       counts_schema,
@@ -140,7 +207,7 @@ router.get(
 */
 router.post(
   "/files",
-  guard,
+  record_guard,
   express.raw({
     type: () => true,
     limit: file_service.MAX_BYTES + 256 * 1024,
@@ -163,7 +230,7 @@ router.post(
 
 router.get(
   "/files/:file_id/link",
-  guard,
+  file_guard,
   respond((req) =>
     file_service.get_file_link(
       req.user,
