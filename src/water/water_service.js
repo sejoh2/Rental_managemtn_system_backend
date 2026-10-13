@@ -431,6 +431,63 @@ async function get_latest_reading_for_unit(
   return result.rows[0] || null;
 }
 
+async function get_previous_reading(
+  owner,
+  property_id,
+  unit_id,
+  billing_period_input
+) {
+  const billing_period = first_day_of_month(
+    billing_period_input
+  );
+
+  const client = await db.get_client();
+
+  try {
+    await ensure_property_access(
+      client,
+      owner,
+      property_id
+    );
+
+    const unit = await client.query(
+      `
+        SELECT id
+        FROM units
+        WHERE id = $1
+          AND property_id = $2
+      `,
+      [unit_id, property_id]
+    );
+
+    if (!unit.rows[0]) {
+      const error = new Error(
+        "Unit not found in this property."
+      );
+
+      error.status_code = 404;
+      throw error;
+    }
+
+    const previous = await get_latest_reading_for_unit(
+      client,
+      unit_id,
+      billing_period
+    );
+
+    return {
+      /*
+        null when the unit has never been read.
+      */
+      previous_reading: previous
+        ? Number(previous.current_reading)
+        : null,
+    };
+  } finally {
+    client.release();
+  }
+}
+
 async function submit_meter_reading(
   owner,
   property_id,
@@ -563,10 +620,34 @@ async function submit_meter_reading(
 
     let previous_reading;
 
-    if (previous) {
-      previous_reading = Number(
-        previous.current_reading
+    /*
+      The meter cannot have gone backwards since it was last
+      read, so the previous reading starts from the unit's last
+      recorded reading. It may be set higher, for water used
+      while the unit stood empty, but never lower.
+    */
+    const last_recorded = previous
+      ? Number(previous.current_reading)
+      : null;
+
+    if (
+      previous &&
+      data.previous_reading !== undefined &&
+      Number(data.previous_reading) < last_recorded
+    ) {
+      const error = new Error(
+        `The previous reading cannot be lower than ${last_recorded}, the last reading recorded for this unit.`
       );
+
+      error.status_code = 422;
+      throw error;
+    }
+
+    if (previous) {
+      previous_reading =
+        data.previous_reading !== undefined
+          ? Number(data.previous_reading)
+          : last_recorded;
     } else if (
       data.previous_reading !== undefined
     ) {
@@ -723,6 +804,17 @@ async function submit_meter_reading(
         billing_period,
         bill_amount,
         final_reading: Boolean(data.final_reading),
+        previous_reading,
+
+        /*
+          Set when the owner raised the previous reading above
+          the unit's last recorded one.
+        */
+        previous_reading_raised_from:
+          last_recorded !== null &&
+          previous_reading > last_recorded
+            ? last_recorded
+            : undefined,
       },
       ip_address,
     });
@@ -1274,6 +1366,7 @@ async function get_water_stats(
 
 module.exports = {
   update_water_rules,
+  get_previous_reading,
   submit_meter_reading,
   review_meter_reading,
   generate_fixed_monthly_bills,

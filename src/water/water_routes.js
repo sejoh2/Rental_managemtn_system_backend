@@ -59,6 +59,12 @@ router.get(
   water_controller.get_water_stats
 );
 
+router.get(
+  "/properties/:property_id/units/:unit_id/water-readings/previous",
+  reading_guard,
+  water_controller.get_previous_reading
+);
+
 router.post(
   "/properties/:property_id/units/:unit_id/water-readings",
   reading_guard,

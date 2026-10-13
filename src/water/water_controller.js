@@ -38,6 +38,26 @@ async function update_water_rules(req, res, next) {
   }
 }
 
+async function get_previous_reading(req, res, next) {
+  try {
+    const { billing_period } = validate_list_readings({
+      billing_period: req.query.billing_period,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: await water_service.get_previous_reading(
+        req.user,
+        validate_property_id(req.params.property_id),
+        validate_unit_id(req.params.unit_id),
+        billing_period
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function submit_meter_reading(
   req,
   res,
@@ -192,6 +212,7 @@ async function get_water_stats(req, res, next) {
 }
 
 module.exports = {
+  get_previous_reading,
   update_water_rules,
   submit_meter_reading,
   review_meter_reading,

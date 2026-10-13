@@ -1485,6 +1485,14 @@ paths:
         reading for a tenant already read that month, for when they move
         out; it is billed as a separate water charge for the units used
         since, and the reading carries `is_final`.
+
+        The previous reading is the unit's last recorded reading.
+        GET .../water-readings/previous?billing_period=YYYY-MM-01 returns
+        it (`previous_reading`, null if the unit was never read) so a form
+        can show it first. `previous_reading` may be sent to raise it, for
+        water used while the unit stood empty, but a value below the last
+        recorded reading is refused with 422. A unit's first reading must
+        send it.
       security:
         - bearerAuth: []
       parameters:
