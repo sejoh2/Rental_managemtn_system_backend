@@ -52,6 +52,12 @@ router.patch(
   unit_controller.update_unit
 );
 
+router.post(
+  "/units/:unit_id/restore",
+  guard,
+  unit_controller.restore_unit
+);
+
 router.delete(
   "/units/:unit_id",
   guard,

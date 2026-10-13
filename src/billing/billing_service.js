@@ -1379,6 +1379,7 @@ module.exports = {
   charge_priority_order_sql,
   get_payable_charge_types,
   apply_tenant_credits,
+  release_charge_payments,
   bill_service_charges,
   create_move_in_charges,
   run_monthly_billing,

@@ -74,6 +74,12 @@ router.post(
   sms_controller.create_broadcast
 );
 
+router.patch(
+  "/sms/broadcasts/:broadcast_id",
+  guard,
+  sms_controller.update_broadcast
+);
+
 router.post(
   "/sms/broadcasts/:broadcast_id/cancel",
   guard,

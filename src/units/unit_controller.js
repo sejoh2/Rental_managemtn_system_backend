@@ -41,12 +41,31 @@ async function list_property_units(req, res, next) {
     const units =
       await unit_service.list_property_units(
         req.user,
-        property_id
+        property_id,
+        req.query.include_archived === "true"
       );
 
     return res.status(200).json({
       success: true,
       data: units,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function restore_unit(req, res, next) {
+  try {
+    const unit = await unit_service.restore_unit(
+      req.user,
+      validate_unit_id(req.params.unit_id),
+      req.ip
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Unit restored.",
+      data: unit,
     });
   } catch (error) {
     next(error);
@@ -120,6 +139,7 @@ async function archive_unit(req, res, next) {
 }
 
 module.exports = {
+  restore_unit,
   create_unit,
   list_property_units,
   get_unit,

@@ -443,6 +443,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/properties/{property_id}/reminders:
+    get:
+      tags: [Step 12 - SMS Centre]
+      summary: Automatic payment reminder settings of a property
+      description: |
+        Owner only. Reminders are off until the owner switches them on
+        for a property. `days_before` lists the days before the rent due
+        day on which a reminder is sent (0 is the due day), `hour` is the
+        hour in Kenya (6 to 20). A reminder goes only to a tenant who owes
+        something at that moment and carries everything they owe.
+        `late_enabled` adds one notice `late_days_after` days after the
+        due day, to tenants who still have a bill past its due date.
+        Each reminder is sent once per tenant and appears in the SMS
+        centre like any other message.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      responses:
+        "200":
+          description: Reminder settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+    put:
+      tags: [Step 12 - SMS Centre]
+      summary: Save a property's automatic payment reminder settings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PropertyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled, days_before, hour, late_enabled, late_days_after]
+              properties:
+                enabled: { type: boolean }
+                days_before:
+                  type: array
+                  items: { type: integer, enum: [0, 1, 2, 3, 5, 7] }
+                hour: { type: integer, minimum: 6, maximum: 20 }
+                late_enabled: { type: boolean }
+                late_days_after: { type: integer, enum: [1, 2, 3, 5, 7, 14] }
+      responses:
+        "200":
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/users:
     post:
       tags: [Step 2 - Admin users]

@@ -65,6 +65,14 @@ function public_payment(payment) {
 
     notes: payment.notes || null,
 
+    /*
+      Who typed in a payment recorded by hand; null for a
+      payment that arrived from M-Pesa.
+    */
+    recorded_by_name: payment.recorded_by_name || null,
+    matched_at: payment.matched_at || null,
+    created_at: payment.created_at || null,
+
     reversed_at: payment.reversed_at || null,
     reverse_reason: payment.reverse_reason || null,
 
@@ -93,12 +101,35 @@ async function get_payment_with_context(
       SELECT
         payments.*,
         tenants.full_name AS tenant_name,
-        units.unit_number
+        units.unit_number,
+        properties.name AS property_name,
+
+        TO_CHAR(
+          payments.received_at
+          AT TIME ZONE 'Africa/Nairobi',
+          'YYYY-MM-DD HH24:MI'
+        ) AS received_at_local,
+
+        NULLIF(
+          TRIM(
+            CONCAT(
+              recorder.first_name,
+              ' ',
+              recorder.last_name
+            )
+          ),
+          ''
+        ) AS recorded_by_name
+
       FROM payments
       LEFT JOIN tenants
         ON tenants.id = payments.tenant_id
       LEFT JOIN units
         ON units.id = payments.unit_id
+      LEFT JOIN properties
+        ON properties.id = payments.property_id
+      LEFT JOIN users AS recorder
+        ON recorder.user_id = payments.recorded_by
       WHERE ${conditions.join(" AND ")}
       ${lock ? "FOR UPDATE OF payments" : ""}
     `,
@@ -531,7 +562,16 @@ async function match_unmatched_payment(
       throw error;
     }
 
-    if (remember_payment_phone && payment.payer_phone) {
+    /*
+      The number it replaces is kept on the payment, so that
+      unassigning the payment can put it back.
+    */
+    const replaces_phone =
+      remember_payment_phone &&
+      payment.payer_phone &&
+      payment.payer_phone !== tenant.payment_phone;
+
+    if (replaces_phone) {
       await client.query(
         `
           UPDATE tenants
@@ -550,12 +590,14 @@ async function match_unmatched_payment(
         UPDATE payments
         SET
           match_type = 'manual',
-          matched_by = $1
+          matched_by = $1,
+          remembered_previous_phone = $3
         WHERE id = $2
       `,
       [
         owner.user_id,
         payment.id,
+        replaces_phone ? tenant.payment_phone : null,
       ]
     );
 
@@ -700,6 +742,57 @@ async function reverse_payment(
 
     const is_manual = payment.payment_source === "manual";
 
+    /*
+      Unassigning says the payment was not this tenant's, so
+      the number that was remembered from it is not theirs
+      either. Their earlier number comes back, unless they have
+      changed it since or another tenant now uses it.
+    */
+    let phone_restored = false;
+
+    if (
+      !is_manual &&
+      payment.tenant_id &&
+      payment.remembered_previous_phone
+    ) {
+      const restored = await client.query(
+        `
+          UPDATE tenants
+          SET payment_phone = $1
+          WHERE id = $2
+            AND payment_phone = $3
+            AND NOT EXISTS (
+              SELECT 1
+              FROM tenants AS others
+              WHERE others.property_id = tenants.property_id
+                AND others.id <> tenants.id
+                AND others.payment_phone = $1
+                AND others.status IN (
+                  'active',
+                  'notice_given'
+                )
+            )
+          RETURNING id
+        `,
+        [
+          payment.remembered_previous_phone,
+          payment.tenant_id,
+          payment.payer_phone,
+        ]
+      );
+
+      phone_restored = Boolean(restored.rows[0]);
+
+      await client.query(
+        `
+          UPDATE payments
+          SET remembered_previous_phone = NULL
+          WHERE id = $1
+        `,
+        [payment.id]
+      );
+    }
+
     if (is_manual) {
       await client.query(
         `
@@ -752,6 +845,7 @@ async function reverse_payment(
         tenant_id: payment.tenant_id,
         amount: payment.amount,
         reason,
+        remembered_phone_removed: phone_restored,
       },
       ip_address,
     });
@@ -960,12 +1054,52 @@ async function list_payments(owner, filters = {}) {
     ]
   );
 
-  return Promise.all(
-    result.rows.map(async (payment) => {
-      payment.applied_to =
-        await get_payment_allocations(payment.id);
+  /*
+    What every payment in the list was applied to, in one
+    query. Looking each one up separately opened many database
+    connections at once.
+  */
+  const allocations = await db.query(
+    `
+      SELECT
+        payment_allocations.payment_id,
+        payment_allocations.amount,
+        tenant_charges.charge_type,
+        tenant_charges.description,
+        tenant_charges.billing_period,
+        TO_CHAR(
+          tenant_charges.billing_period,
+          'Mon YYYY'
+        ) AS period_label
+      FROM payment_allocations
+      INNER JOIN tenant_charges
+        ON tenant_charges.id =
+          payment_allocations.tenant_charge_id
+      WHERE payment_allocations.payment_id = ANY($1::BIGINT[])
+      ORDER BY payment_allocations.id
+    `,
+    [result.rows.map((payment) => payment.id)]
+  );
 
-      return public_payment(payment);
+  const applied_to = {};
+
+  for (const allocation of allocations.rows) {
+    applied_to[allocation.payment_id] =
+      applied_to[allocation.payment_id] || [];
+
+    applied_to[allocation.payment_id].push({
+      charge_type: allocation.charge_type,
+      description: allocation.description,
+      billing_period: allocation.billing_period,
+      period_label: allocation.period_label,
+      amount: Number(allocation.amount),
+    });
+  }
+
+  return result.rows.map((payment) =>
+    public_payment({
+      ...payment,
+      applied_to: applied_to[payment.id] || [],
     })
   );
 }
@@ -1093,12 +1227,52 @@ async function list_tenant_payments(owner, tenant_id) {
     [tenant_id]
   );
 
-  return Promise.all(
-    result.rows.map(async (payment) => {
-      payment.applied_to =
-        await get_payment_allocations(payment.id);
+  /*
+    What every payment in the list was applied to, in one
+    query. Looking each one up separately opened many database
+    connections at once.
+  */
+  const allocations = await db.query(
+    `
+      SELECT
+        payment_allocations.payment_id,
+        payment_allocations.amount,
+        tenant_charges.charge_type,
+        tenant_charges.description,
+        tenant_charges.billing_period,
+        TO_CHAR(
+          tenant_charges.billing_period,
+          'Mon YYYY'
+        ) AS period_label
+      FROM payment_allocations
+      INNER JOIN tenant_charges
+        ON tenant_charges.id =
+          payment_allocations.tenant_charge_id
+      WHERE payment_allocations.payment_id = ANY($1::BIGINT[])
+      ORDER BY payment_allocations.id
+    `,
+    [result.rows.map((payment) => payment.id)]
+  );
 
-      return public_payment(payment);
+  const applied_to = {};
+
+  for (const allocation of allocations.rows) {
+    applied_to[allocation.payment_id] =
+      applied_to[allocation.payment_id] || [];
+
+    applied_to[allocation.payment_id].push({
+      charge_type: allocation.charge_type,
+      description: allocation.description,
+      billing_period: allocation.billing_period,
+      period_label: allocation.period_label,
+      amount: Number(allocation.amount),
+    });
+  }
+
+  return result.rows.map((payment) =>
+    public_payment({
+      ...payment,
+      applied_to: applied_to[payment.id] || [],
     })
   );
 }

@@ -661,7 +661,47 @@ async function confirm_reconciliation(
 
     /*
       The credit is now either used or part of the refund.
+      What each credit held is kept with the settlement, so
+      reopening it can put the credit back exactly.
     */
+    const credits_before = await client.query(
+      `
+        SELECT id, remaining_amount
+        FROM tenant_credits
+        WHERE tenant_id = $1
+          AND remaining_amount > 0
+      `,
+      [tenant_id]
+    );
+
+    await client.query(
+      `
+        UPDATE deposit_settlements
+        SET breakdown =
+          breakdown || jsonb_build_object(
+            'credits',
+            $1::JSONB,
+            'last_payment_id',
+            (
+              SELECT COALESCE(MAX(id), 0)
+              FROM payments
+              WHERE tenant_id = $3
+            )
+          )
+        WHERE id = $2
+      `,
+      [
+        JSON.stringify(
+          credits_before.rows.map((credit) => ({
+            id: Number(credit.id),
+            remaining: Number(credit.remaining_amount),
+          }))
+        ),
+        settlement_id,
+        tenant_id,
+      ]
+    );
+
     await client.query(
       `
         UPDATE tenant_credits
@@ -721,6 +761,254 @@ async function confirm_reconciliation(
         applied_to_bills,
         refund_due,
         tenant_owes,
+      },
+      ip_address,
+    });
+
+    return get_reconciliation(owner, tenant_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/*
+  Undoes a confirmed reconciliation so the owner can correct
+  it, for example to add a deduction that was forgotten, and
+  confirm again.
+
+  Everything the confirmation did is put back: the bills the
+  deposits paid are unpaid again, the deductions are removed,
+  and the credit the tenant held is restored.
+
+  Refused once the refund has been recorded as paid, or once
+  the tenant has paid anything after the confirmation: those
+  must be dealt with first, because money has already moved.
+*/
+async function reopen_reconciliation(
+  owner,
+  tenant_id,
+  data,
+  ip_address
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const tenant = await load_tenant(
+      client,
+      owner.user_id,
+      tenant_id,
+      true
+    );
+
+    const settlement_result = await client.query(
+      `
+        SELECT *
+        FROM deposit_settlements
+        WHERE tenant_id = $1
+        FOR UPDATE
+      `,
+      [tenant_id]
+    );
+
+    const settlement = settlement_result.rows[0];
+
+    if (!settlement) {
+      throw service_error(
+        "This tenant's deposits have not been reconciled yet."
+      );
+    }
+
+    if (settlement.refund_paid_on) {
+      throw service_error(
+        "The refund has already been recorded as paid, so this reconciliation can no longer be reopened.",
+        409
+      );
+    }
+
+    /*
+      The confirmation noted the tenant's newest payment, so a
+      later one is recognised by its number. A settlement made
+      before that was recorded falls back to the time.
+    */
+    const last_payment_id =
+      settlement.breakdown?.last_payment_id;
+
+    const later_payment = await client.query(
+      `
+        SELECT 1
+        FROM payments
+        WHERE tenant_id = $1
+          AND status = 'matched'
+          AND (
+            ($2::BIGINT IS NOT NULL AND id > $2::BIGINT)
+            OR (
+              $2::BIGINT IS NULL
+              AND created_at > $3::TIMESTAMPTZ
+            )
+          )
+        LIMIT 1
+      `,
+      [
+        tenant_id,
+        last_payment_id ?? null,
+        settlement.confirmed_at,
+      ]
+    );
+
+    if (later_payment.rows[0]) {
+      throw service_error(
+        "This tenant has paid since the reconciliation was confirmed. Reverse that payment first, then reopen.",
+        409
+      );
+    }
+
+    /*
+      Bills the deposits and credit paid are unpaid again.
+    */
+    const applications = await client.query(
+      `
+        SELECT tenant_charge_id, SUM(amount) AS amount
+        FROM deposit_applications
+        WHERE settlement_id = $1
+        GROUP BY tenant_charge_id
+      `,
+      [settlement.id]
+    );
+
+    for (const application of applications.rows) {
+      await client.query(
+        `
+          UPDATE tenant_charges
+          SET
+            amount_paid = amount_paid - $1,
+            status = CASE
+              WHEN amount_paid - $1 <= 0 THEN 'open'
+              ELSE 'partial'
+            END
+          WHERE id = $2
+        `,
+        [
+          application.amount,
+          application.tenant_charge_id,
+        ]
+      );
+    }
+
+    await client.query(
+      `
+        DELETE FROM deposit_applications
+        WHERE settlement_id = $1
+      `,
+      [settlement.id]
+    );
+
+    /*
+      Deductions exist only because of the confirmation. They
+      are deleted, not voided, so the corrected ones can take
+      their place.
+    */
+    await client.query(
+      `
+        DELETE FROM tenant_charges
+        WHERE tenant_id = $1
+          AND charge_type = 'deduction'
+      `,
+      [tenant_id]
+    );
+
+    /*
+      The credit goes back where it was. A settlement made
+      before the credit was recorded per row gets its total
+      back on the newest credits.
+    */
+    const saved_credits = settlement.breakdown?.credits;
+
+    if (Array.isArray(saved_credits)) {
+      for (const credit of saved_credits) {
+        await client.query(
+          `
+            UPDATE tenant_credits
+            SET remaining_amount =
+              LEAST(original_amount, $1::NUMERIC)
+            WHERE id = $2
+              AND tenant_id = $3
+          `,
+          [credit.remaining, credit.id, tenant_id]
+        );
+      }
+    } else {
+      let to_restore = money(settlement.credit_held);
+
+      const credits = await client.query(
+        `
+          SELECT id, original_amount
+          FROM tenant_credits
+          WHERE tenant_id = $1
+          ORDER BY id DESC
+          FOR UPDATE
+        `,
+        [tenant_id]
+      );
+
+      for (const credit of credits.rows) {
+        if (to_restore <= 0) {
+          break;
+        }
+
+        const amount = Math.min(
+          to_restore,
+          money(credit.original_amount)
+        );
+
+        await client.query(
+          `
+            UPDATE tenant_credits
+            SET remaining_amount = $1
+            WHERE id = $2
+          `,
+          [amount, credit.id]
+        );
+
+        to_restore = money(to_restore - amount);
+      }
+    }
+
+    await client.query(
+      `
+        DELETE FROM deposit_settlements
+        WHERE id = $1
+      `,
+      [settlement.id]
+    );
+
+    await client.query(
+      `
+        UPDATE tenants
+        SET deposit_refund_decision = NULL
+        WHERE id = $1
+      `,
+      [tenant_id]
+    );
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "DEPOSIT_RECONCILIATION_REOPENED",
+      entity_type: "tenant",
+      entity_id: tenant.id,
+      metadata: {
+        property_id: tenant.property_id,
+        unit_number: tenant.unit_number,
+        reason: data.reason,
+        refund_due_was: settlement.refund_due,
+        tenant_owed_was: settlement.tenant_owes,
+        deductions_were: settlement.deductions_total,
       },
       ip_address,
     });
@@ -816,5 +1104,6 @@ module.exports = {
   get_reconciliation,
   calculate_reconciliation,
   confirm_reconciliation,
+  reopen_reconciliation,
   record_refund,
 };

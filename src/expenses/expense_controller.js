@@ -15,6 +15,7 @@ const {
   validate_create_expense,
   validate_list_expenses,
   validate_void_expense,
+  validate_update_expense,
   validate_property_id,
   validate_expense_id,
 } = require("./expense_validator");
@@ -169,6 +170,30 @@ async function get_expense(req, res, next) {
   }
 }
 
+async function update_expense(req, res, next) {
+  try {
+    const expense_id = validate_expense_id(
+      req.params.expense_id
+    );
+
+    const expense =
+      await expense_service.update_expense(
+        req.user,
+        expense_id,
+        validate_update_expense(req.body),
+        req.ip
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Expense updated.",
+      data: expense,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function void_expense(req, res, next) {
   try {
     const expense_id = validate_expense_id(
@@ -246,6 +271,7 @@ async function get_expense_reconciliation(
 }
 
 module.exports = {
+  update_expense,
   create_expense,
   list_expenses,
   export_expenses,

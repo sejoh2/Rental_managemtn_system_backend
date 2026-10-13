@@ -341,7 +341,15 @@ async function create_unit(
   return load_public_unit(unit.id);
 }
 
-async function list_property_units(owner, property_id) {
+/*
+  include_archived adds the units taken out of use, which the
+  Units page lists under their own status.
+*/
+async function list_property_units(
+  owner,
+  property_id,
+  include_archived = false
+) {
   await ensure_owner_owns_property(
     owner.user_id,
     property_id
@@ -351,12 +359,16 @@ async function list_property_units(owner, property_id) {
     `
       ${unit_overview_select}
       WHERE units.property_id = $1
-        AND units.status != 'inactive'
+        AND (
+          $2::BOOLEAN
+          OR units.status != 'inactive'
+        )
       ORDER BY
+        (units.status = 'inactive'),
         units.block_or_floor NULLS LAST,
         units.unit_number ASC
     `,
-    [property_id]
+    [property_id, include_archived]
   );
 
   return result.rows.map(public_unit);
@@ -587,6 +599,54 @@ async function update_unit(
   return load_public_unit(unit.id);
 }
 
+/*
+  Puts an archived unit back in use, as a vacant unit.
+*/
+async function restore_unit(
+  owner,
+  unit_id,
+  ip_address
+) {
+  const unit = await get_unit_row_for_owner(
+    owner.user_id,
+    unit_id
+  );
+
+  if (unit.status !== "inactive") {
+    const error = new Error(
+      "This unit is not archived."
+    );
+
+    error.status_code = 400;
+    throw error;
+  }
+
+  await db.query(
+    `
+      UPDATE units
+      SET
+        status = 'vacant',
+        archived_at = NULL
+      WHERE id = $1
+    `,
+    [unit_id]
+  );
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "UNIT_RESTORED",
+    entity_type: "unit",
+    entity_id: unit_id,
+    metadata: {
+      property_id: unit.property_id,
+      unit_number: unit.unit_number,
+    },
+    ip_address,
+  });
+
+  return load_public_unit(unit_id);
+}
+
 async function archive_unit(
   owner,
   unit_id,
@@ -645,4 +705,5 @@ module.exports = {
   get_unit_by_id,
   update_unit,
   archive_unit,
+  restore_unit,
 };

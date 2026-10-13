@@ -56,6 +56,10 @@ const {
 const {
   start_water_reminder_scheduler,
 } = require("./src/water/water_notification_service");
+const {
+  init_reminder_tables,
+  start_payment_reminder_scheduler,
+} = require("./src/reminders/reminder_service");
 
 
 function require_environment_variable(name) {
@@ -105,6 +109,7 @@ async function start_server() {
     await init_agreement_tables();
     await init_sms_tables();
     await init_settings_tables();
+    await init_reminder_tables();
 
     console.log("[PAYMENTS] Tables are ready.");
 
@@ -127,6 +132,8 @@ async function start_server() {
     start_billing_scheduler();
 
     start_water_reminder_scheduler();
+
+    start_payment_reminder_scheduler();
 
     console.log("[BILLING] Monthly billing scheduler started.");
 

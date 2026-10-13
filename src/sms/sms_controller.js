@@ -208,6 +208,45 @@ async function list_broadcasts(req, res, next) {
   }
 }
 
+async function update_broadcast(req, res, next) {
+  try {
+    const broadcast_id = validate_broadcast_id(
+      req.params.broadcast_id
+    );
+
+    const data = validate_broadcast(req.body);
+
+    const broadcast =
+      await sms_service.update_broadcast(
+        req.user,
+        broadcast_id,
+        data
+      );
+
+    await log_audit({
+      user_id: req.user.user_id,
+      action: "SMS_BROADCAST_UPDATED",
+      entity_type: "sms_broadcast",
+      entity_id: broadcast.id,
+      metadata: {
+        recipient_group: broadcast.recipient_group,
+        property_id: broadcast.property_id,
+        tenant_id: broadcast.tenant_id,
+        scheduled_at: data.send_at,
+      },
+      ip_address: req.ip,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "SMS broadcast updated.",
+      data: broadcast,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function list_messages(req, res, next) {
   try {
     const filters = validate_list_messages(
@@ -305,6 +344,7 @@ async function retry_message(req, res, next) {
 }
 
 module.exports = {
+  update_broadcast,
   create_template,
   list_templates,
   update_template,

@@ -1470,6 +1470,133 @@ async function get_sms_stats(owner) {
   };
 }
 
+/*
+  Changes a broadcast that is still waiting for its time: the
+  message, who it goes to, or when. Once the sending has
+  started it can no longer be changed.
+*/
+async function update_broadcast(
+  owner,
+  broadcast_id,
+  data
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const existing_result = await client.query(
+      `
+        SELECT *
+        FROM sms_broadcasts
+        WHERE id = $1
+          AND owner_id = $2
+        FOR UPDATE
+      `,
+      [broadcast_id, owner.user_id]
+    );
+
+    const existing = existing_result.rows[0];
+
+    if (!existing) {
+      throw service_error(
+        "SMS broadcast not found or you do not have access to it.",
+        404
+      );
+    }
+
+    if (
+      existing.status !== "scheduled" ||
+      existing.messages_created_at ||
+      new Date(existing.scheduled_at) <= new Date()
+    ) {
+      throw service_error(
+        "This broadcast has already been sent or cancelled, so it can no longer be changed.",
+        409
+      );
+    }
+
+    if (!data.send_at) {
+      throw service_error(
+        "Choose the date and time to send it.",
+        422
+      );
+    }
+
+    let template = null;
+
+    if (data.template_id) {
+      template = await get_template_or_throw(
+        client,
+        owner.user_id,
+        data.template_id
+      );
+    }
+
+    const message_template =
+      data.message ||
+      template?.body;
+
+    if (!message_template) {
+      throw service_error(
+        "Provide a message or select an SMS template.",
+        422
+      );
+    }
+
+    /*
+      Checks that the property or tenant belongs to this owner.
+    */
+    await find_recipients(client, owner.user_id, data);
+
+    await client.query(
+      `
+        UPDATE sms_broadcasts
+        SET
+          template_id = $1,
+          template_name = $2,
+          message_template = $3,
+          recipient_group = $4,
+          property_id = $5,
+          tenant_id = $6,
+          scheduled_at = $7::TIMESTAMPTZ
+        WHERE id = $8
+      `,
+      [
+        template?.id || null,
+        template?.name || null,
+        message_template,
+        data.recipient_group,
+        data.property_id || null,
+        data.tenant_id || null,
+        new Date(data.send_at),
+        existing.id,
+      ]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const read_client = await db.get_client();
+
+  try {
+    return public_broadcast(
+      await get_broadcast_with_counts(
+        read_client,
+        owner.user_id,
+        broadcast_id
+      )
+    );
+  } finally {
+    read_client.release();
+  }
+}
+
 async function cancel_broadcast(
   owner,
   broadcast_id
@@ -1726,6 +1853,7 @@ module.exports = {
   list_messages,
   get_sms_stats,
 
+  update_broadcast,
   cancel_broadcast,
   retry_message,
 

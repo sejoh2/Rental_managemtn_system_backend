@@ -6,6 +6,7 @@ const {
 
 const {
   bill_service_charges,
+  release_charge_payments,
   apply_tenant_credits,
 } = require("../billing/billing_service");
 
@@ -486,49 +487,172 @@ async function update_service_charge(
   Stops the charge from being billed again. What tenants were
   already billed stays on their accounts.
 */
-async function archive_service_charge(
-  owner,
-  service_charge_id,
-  ip_address
-) {
+/*
+  The bills a service charge has made that can still be
+  cancelled: not void, and not already settled from a deposit
+  in a confirmed move-out reconciliation.
+*/
+const cancellable_bills_sql = `
+  FROM tenant_charges
+  WHERE tenant_charges.owner_id = $2
+    AND tenant_charges.charge_type = 'service'
+    AND tenant_charges.source_id = $1
+    AND tenant_charges.status <> 'void'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM deposit_applications
+      WHERE deposit_applications.tenant_charge_id =
+        tenant_charges.id
+    )
+`;
+
+/*
+  What cancelling a service charge's bills would do, for the
+  owner to read before choosing.
+*/
+async function get_billed_summary(owner, service_charge_id) {
   const result = await db.query(
     `
-      UPDATE service_charges
-      SET
-        status = 'archived',
-        archived_at = CURRENT_TIMESTAMP
-      WHERE id = $1
-        AND owner_id = $2
-        AND status = 'active'
-      RETURNING *
+      SELECT
+        COUNT(*) AS bills,
+        COUNT(DISTINCT tenant_id) AS tenants,
+        COALESCE(SUM(amount_due), 0) AS billed,
+        COALESCE(SUM(amount_paid), 0) AS paid
+      ${cancellable_bills_sql}
     `,
     [service_charge_id, owner.user_id]
   );
 
-  const charge = result.rows[0];
+  const row = result.rows[0];
 
-  if (!charge) {
-    const error = new Error(
-      "Service charge not found or you do not have access to it."
+  return {
+    bills: Number(row.bills),
+    tenants: Number(row.tenants),
+    billed: Number(row.billed),
+    paid: Number(row.paid),
+  };
+}
+
+/*
+  Removes a service charge, so nobody is billed for it again.
+
+  cancel_bills also undoes the bills it already made, for a
+  charge added by mistake: each bill is marked void, and what a
+  tenant had paid towards it goes back to them as credit, which
+  then settles their other bills. A bill already settled from a
+  deposit at move-out is left as it is.
+*/
+async function archive_service_charge(
+  owner,
+  service_charge_id,
+  ip_address,
+  cancel_bills = false
+) {
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `
+        UPDATE service_charges
+        SET
+          status = 'archived',
+          archived_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+          AND owner_id = $2
+          AND status = 'active'
+        RETURNING *
+      `,
+      [service_charge_id, owner.user_id]
     );
 
-    error.status_code = 404;
-    throw error;
-  }
+    const charge = result.rows[0];
 
-  await log_audit({
-    user_id: owner.user_id,
-    action: "SERVICE_CHARGE_REMOVED",
-    entity_type: "service_charge",
-    entity_id: charge.id,
-    metadata: {
-      property_id: charge.property_id,
-      name: charge.name,
-      frequency: charge.frequency,
-      amount: charge.amount,
-    },
-    ip_address,
-  });
+    if (!charge) {
+      const error = new Error(
+        "Service charge not found or you do not have access to it."
+      );
+
+      error.status_code = 404;
+      throw error;
+    }
+
+    const cancelled = {
+      bills: 0,
+      billed: 0,
+      returned_as_credit: 0,
+    };
+
+    if (cancel_bills) {
+      const bills = await client.query(
+        `
+          SELECT tenant_charges.*
+          ${cancellable_bills_sql}
+          ORDER BY tenant_charges.id
+          FOR UPDATE OF tenant_charges
+        `,
+        [charge.id, owner.user_id]
+      );
+
+      for (const bill of bills.rows) {
+        const paid = Number(bill.amount_paid);
+
+        if (paid > 0) {
+          await release_charge_payments(client, bill, paid);
+        }
+
+        await client.query(
+          `
+            UPDATE tenant_charges
+            SET
+              amount_paid = 0,
+              status = 'void'
+            WHERE id = $1
+          `,
+          [bill.id]
+        );
+
+        cancelled.bills += 1;
+        cancelled.billed += Number(bill.amount_due);
+        cancelled.returned_as_credit += paid;
+      }
+
+      const tenant_ids = [
+        ...new Set(bills.rows.map((bill) => bill.tenant_id)),
+      ];
+
+      for (const tenant_id of tenant_ids) {
+        await apply_tenant_credits(client, tenant_id);
+      }
+    }
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "SERVICE_CHARGE_REMOVED",
+      entity_type: "service_charge",
+      entity_id: charge.id,
+      metadata: {
+        property_id: charge.property_id,
+        name: charge.name,
+        frequency: charge.frequency,
+        amount: charge.amount,
+        bills_cancelled: cancelled.bills,
+        amount_cancelled: cancelled.billed,
+        returned_as_credit: cancelled.returned_as_credit,
+      },
+      ip_address,
+    });
+
+    return cancelled;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = {
@@ -536,4 +660,5 @@ module.exports = {
   create_service_charge,
   update_service_charge,
   archive_service_charge,
+  get_billed_summary,
 };

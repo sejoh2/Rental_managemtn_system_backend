@@ -22,10 +22,14 @@ const config = process.env.DATABASE_URL
 const pool = new Pool({
   ...config,
   /*
-    Hosted databases allow a small number of connections
-    (15 on the current plan), shared with restarts and tools.
+    Hosted databases allow a small number of connections: 15
+    on the current plan, of which 3 are kept for the database's
+    own administrators and others go to tools such as a
+    database viewer. The server therefore keeps to 5; a busy
+    moment makes requests wait a little instead of failing.
   */
-  max: Number(process.env.DB_POOL_MAX) || 8,
+  max: Number(process.env.DB_POOL_MAX) || 5,
+  application_name: "kodi-backend",
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });

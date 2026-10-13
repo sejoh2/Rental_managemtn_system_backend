@@ -5,8 +5,30 @@ function not_found(req, res) {
   });
 }
 
+/*
+  The database refused or could not give a connection in time.
+  The person gets a plain sentence, not the database's own
+  message.
+*/
+function is_database_busy(error) {
+  return (
+    ["53300", "53400", "57P03"].includes(error.code) ||
+    /timeout exceeded when trying to connect/i.test(
+      error.message || ""
+    )
+  );
+}
+
 function error_handler(error, req, res, next) {
   console.error("[ERROR]", error);
+
+  if (is_database_busy(error)) {
+    return res.status(503).json({
+      success: false,
+      error:
+        "The server is busy right now. Please try again in a moment.",
+    });
+  }
 
   return res.status(error.status_code || 400).json({
     success: false,

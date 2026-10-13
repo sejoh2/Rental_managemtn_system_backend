@@ -64,6 +64,12 @@ router.get(
   expense_controller.get_expense
 );
 
+router.patch(
+  "/expenses/:expense_id",
+  guard,
+  expense_controller.update_expense
+);
+
 /*
   A caretaker can record expenses, but only an owner can void one.
   This prevents a caretaker from hiding an already-recorded expense.

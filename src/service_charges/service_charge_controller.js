@@ -93,15 +93,36 @@ async function archive_service_charge(req, res, next) {
       req.params.service_charge_id
     );
 
-    await service_charge_service.archive_service_charge(
-      req.user,
-      service_charge_id,
-      req.ip
-    );
+    const cancelled =
+      await service_charge_service.archive_service_charge(
+        req.user,
+        service_charge_id,
+        req.ip,
+        req.query.cancel_bills === "true"
+      );
 
     return res.status(200).json({
       success: true,
       message: "Service charge removed successfully.",
+      data: cancelled,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function get_billed_summary(req, res, next) {
+  try {
+    const service_charge_id = validate_service_charge_id(
+      req.params.service_charge_id
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: await service_charge_service.get_billed_summary(
+        req.user,
+        service_charge_id
+      ),
     });
   } catch (error) {
     next(error);
@@ -113,4 +134,5 @@ module.exports = {
   create_service_charge,
   update_service_charge,
   archive_service_charge,
+  get_billed_summary,
 };

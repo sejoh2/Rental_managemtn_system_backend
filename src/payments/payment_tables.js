@@ -442,6 +442,15 @@ async function init_payment_tables() {
     ALTER TABLE payments
       ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
 
+    /*
+      The tenant's payment number before "remember this number"
+      replaced it when this payment was assigned. Unassigning
+      the payment puts it back.
+    */
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS remembered_previous_phone
+      VARCHAR(20);
+
     ALTER TABLE payments
       ADD COLUMN IF NOT EXISTS reversed_by BIGINT
       REFERENCES users(user_id)

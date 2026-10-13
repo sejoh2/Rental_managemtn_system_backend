@@ -77,6 +77,10 @@ function public_expense(expense) {
       ? Number(expense.maintenance_request_id)
       : null,
 
+    unit_id: expense.unit_id
+      ? Number(expense.unit_id)
+      : null,
+
     unit_number: expense.unit_number || null,
 
     recovery: expense_recovery(expense),
@@ -173,6 +177,173 @@ async function ensure_property_access(
   throw error;
 }
 
+/*
+  A cost can be for one unit of the property or for the whole
+  property (no unit).
+*/
+async function ensure_unit_in_property(
+  client,
+  unit_id,
+  property_id
+) {
+  if (!unit_id) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT id, unit_number
+      FROM units
+      WHERE id = $1
+        AND property_id = $2
+    `,
+    [unit_id, property_id]
+  );
+
+  if (!result.rows[0]) {
+    const error = new Error(
+      "That unit does not belong to this property."
+    );
+
+    error.status_code = 422;
+    throw error;
+  }
+
+  return result.rows[0];
+}
+
+/*
+  Corrects an expense typed in by hand. An expense that came
+  from a maintenance request is fixed, because a tenant may
+  have been charged for it; a voided one stays as it is.
+  Owner only, like voiding.
+*/
+async function update_expense(
+  owner,
+  expense_id,
+  data,
+  ip_address
+) {
+  if (owner.role !== "owner") {
+    const error = new Error(
+      "Only the owner can change an expense."
+    );
+
+    error.status_code = 403;
+    throw error;
+  }
+
+  const client = await db.get_client();
+
+  try {
+    await client.query("BEGIN");
+
+    const existing_result = await client.query(
+      `
+        SELECT *
+        FROM expenses
+        WHERE id = $1
+          AND owner_id = $2
+        FOR UPDATE
+      `,
+      [expense_id, owner.user_id]
+    );
+
+    const existing = existing_result.rows[0];
+
+    if (!existing) {
+      const error = new Error(
+        "Expense not found or you do not have access to it."
+      );
+
+      error.status_code = 404;
+      throw error;
+    }
+
+    if (existing.status === "void") {
+      const error = new Error(
+        "A voided expense cannot be changed."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    if (existing.maintenance_request_id) {
+      const error = new Error(
+        "This expense came from a maintenance request, so it cannot be changed here. Void it if it is wrong."
+      );
+
+      error.status_code = 400;
+      throw error;
+    }
+
+    if (data.unit_id) {
+      await ensure_unit_in_property(
+        client,
+        data.unit_id,
+        existing.property_id
+      );
+    }
+
+    const editable_fields = [
+      "category",
+      "amount",
+      "expense_date",
+      "notes",
+      "unit_id",
+    ];
+
+    const fields = editable_fields.filter(
+      (field) => data[field] !== undefined
+    );
+
+    if (fields.length) {
+      await client.query(
+        `
+          UPDATE expenses
+          SET ${fields
+            .map(
+              (field, index) => `${field} = $${index + 1}`
+            )
+            .join(", ")}
+          WHERE id = $${fields.length + 1}
+        `,
+        [
+          ...fields.map((field) => data[field] ?? null),
+          existing.id,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    await log_audit({
+      user_id: owner.user_id,
+      action: "EXPENSE_UPDATED",
+      entity_type: "expense",
+      entity_id: existing.id,
+      metadata: {
+        property_id: existing.property_id,
+        updated_fields: fields,
+        previous_amount: existing.amount,
+        new_amount:
+          data.amount !== undefined
+            ? data.amount
+            : undefined,
+      },
+      ip_address,
+    });
+
+    return get_expense_for_owner(owner, existing.id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function create_expense(
   user,
   property_id,
@@ -192,6 +363,12 @@ async function create_expense(
 
     const owner_id = get_owner_id(user);
 
+    const unit = await ensure_unit_in_property(
+      client,
+      data.unit_id,
+      property.id
+    );
+
     const result = await client.query(
       `
         INSERT INTO expenses (
@@ -203,11 +380,12 @@ async function create_expense(
           notes,
           receipt_url,
           created_by,
-          created_by_role
+          created_by_role,
+          unit_id
         )
         VALUES (
           $1,$2,$3,$4,$5,
-          $6,$7,$8,$9
+          $6,$7,$8,$9,$10
         )
         RETURNING *
       `,
@@ -221,6 +399,7 @@ async function create_expense(
         data.receipt_url || null,
         user.user_id,
         user.role,
+        unit?.id || null,
       ]
     );
 
@@ -245,6 +424,7 @@ async function create_expense(
 
     return public_expense({
       ...expense,
+      unit_number: unit?.unit_number || null,
       property_name: property.name,
       created_by_name: [
         user.first_name,
@@ -950,6 +1130,7 @@ async function get_expense_reconciliation(
 }
 
 module.exports = {
+  update_expense,
   create_expense,
   list_expenses,
   get_expense_for_owner,

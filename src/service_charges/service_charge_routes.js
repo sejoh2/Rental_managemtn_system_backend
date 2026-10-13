@@ -48,4 +48,10 @@ router.delete(
   service_charge_controller.archive_service_charge
 );
 
+router.get(
+  "/service-charges/:service_charge_id/billed",
+  guard,
+  service_charge_controller.get_billed_summary
+);
+
 module.exports = router;

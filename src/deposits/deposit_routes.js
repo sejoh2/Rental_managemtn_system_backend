@@ -149,6 +149,28 @@ router.post(
   )
 );
 
+const reopen_schema = z.object({
+  reason: z.string()
+    .trim()
+    .min(3, "Say why the reconciliation is being reopened.")
+    .max(500),
+});
+
+router.post(
+  "/tenants/:tenant_id/deposit-reconciliation/reopen",
+  guard,
+  handle(
+    (req, tenant_id) =>
+      deposit_service.reopen_reconciliation(
+        req.user,
+        tenant_id,
+        validate(reopen_schema, req.body),
+        req.ip
+      ),
+    "Reconciliation reopened."
+  )
+);
+
 router.post(
   "/tenants/:tenant_id/deposit-reconciliation/refund",
   guard,

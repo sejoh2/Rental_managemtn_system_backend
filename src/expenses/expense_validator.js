@@ -29,7 +29,26 @@ const create_expense_schema = z.object({
     .max(2000)
     .nullable()
     .optional(),
+
+  /*
+    The unit the cost was for. Leave it out, or send null, for
+    a cost of the whole property.
+  */
+  unit_id: z.coerce.number()
+    .int()
+    .positive()
+    .nullable()
+    .optional(),
 });
+
+const update_expense_schema = create_expense_schema
+  .partial()
+  .refine(
+    (data) => Object.keys(data).length > 0,
+    {
+      message: "Provide at least one field to change.",
+    }
+  );
 
 const list_expenses_schema = z.object({
   property_id: z.coerce.number()
@@ -108,6 +127,13 @@ module.exports = {
       list_expenses_schema,
       data,
       "Expense filters are invalid."
+    ),
+
+  validate_update_expense: (data) =>
+    validate(
+      update_expense_schema,
+      data,
+      "Expense data is invalid."
     ),
 
   validate_void_expense: (data) =>
