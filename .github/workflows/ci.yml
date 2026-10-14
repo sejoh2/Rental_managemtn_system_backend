@@ -57,10 +57,8 @@ jobs:
         with:
           node-version: 24
 
-      # Only what runs on the server (not nodemon). "critical" for now: the
-      # africastalking package pulls in an old axios flagged "high" with no
-      # fixed version yet. Raise to "high" once that is replaced.
-      - run: npm audit --omit=dev --audit-level=critical
+      # Only what runs on the server (not nodemon).
+      - run: npm audit --omit=dev --audit-level=high
 
   startup:
     name: Starts on an empty database, twice
