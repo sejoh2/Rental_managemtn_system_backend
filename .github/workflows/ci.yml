@@ -8,6 +8,10 @@ on:
   push:
     branches: [test, main]
   workflow_dispatch:
+  # Every Monday at 07:00 Nairobi time, on main (what is live): a vulnerability
+  # found since the last change shows here, without any pull request or branch.
+  schedule:
+    - cron: "0 4 * * 1"
 
 # A newer push to the same branch cancels the older run, to save minutes.
 concurrency:
