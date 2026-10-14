@@ -50,6 +50,11 @@ async function test_connection() {
 }
 
 module.exports = {
+  /*
+    The connection settings, for the one connection that is kept
+    outside the pool to listen for announcements (src/live).
+  */
+  config,
   query: (text, params) => pool.query(text, params),
   get_client: () => pool.connect(),
   test_connection,

@@ -2504,6 +2504,70 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
+  /api/live/ticket:
+    post:
+      tags: [Live notifications]
+      summary: A one-minute pass for the live bell connection
+      description: |
+        Signed in. ?for=admin (the admin's bell; administrator only) or
+        ?for=owner (the bell of the owner account in use; an admin inside
+        an owner's account gets that owner's bell). The pass is a token of
+        type `live`, valid 60 seconds, tied to the sign-in session; it is
+        not accepted anywhere else.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: for
+          in: query
+          schema: { type: string, enum: [admin, owner] }
+      responses:
+        "200":
+          description: The pass
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      ticket: { type: string }
+                      expires_in_seconds: { type: integer, example: 60 }
+        "403":
+          description: Not this person's bell
+
+  /api/live/stream:
+    get:
+      tags: [Live notifications]
+      summary: The live bell connection (Server-Sent Events)
+      description: |
+        Open with ?ticket=<pass from /api/live/ticket>, e.g. with the
+        browser's EventSource. Events: `ready` once when opened, then
+        `bell` whenever something that bell counts changes (no data: the
+        client fetches the counts again). Comment lines every 25 seconds keep
+        proxies from closing it. Refused with 401 for a missing, expired or
+        forged pass, or a session that has ended; a session that ends while
+        open is closed within 5 minutes. At most 10 connections per person
+        (429). The changes are announced by database triggers through
+        PostgreSQL NOTIFY on the channel bell_changed, so every running server
+        receives them.
+      parameters:
+        - name: ticket
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401":
+          description: Missing, expired or forged pass, or the session ended
+        "429":
+          description: Too many open connections for this person
+
   /api/caretaker/properties:
     get:
       tags: [Step 11 - Caretakers]
