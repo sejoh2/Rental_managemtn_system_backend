@@ -60,6 +60,12 @@ async function authenticate(req, res, next) {
     req.user = user;
 
     /*
+      The sign-in session this request belongs to (the admin's
+      own, also while working inside an owner's account).
+    */
+    req.session_id = decoded.sid;
+
+    /*
       A repeat of a request that was already carried out (same
       Idempotency-Key) is answered here and goes no further.
     */

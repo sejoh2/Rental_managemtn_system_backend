@@ -138,6 +138,94 @@ jobs:
             wait "$pid" || true
           done
 
+  deploy-rehearsal:
+    name: Deploys like Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rental_deploy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # Production settings, with throwaway values. No real key or password is used in CI.
+    env:
+      NODE_ENV: production
+      TRUST_PROXY: "true"
+      PORT: 10000
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rental_deploy
+      DB_SSL: "false"
+      JWT_ACCESS_SECRET: ci-deploy-access-secret-not-used-anywhere-else
+      JWT_REFRESH_SECRET: ci-deploy-refresh-secret-not-used-anywhere-else
+      PAYMENT_CREDENTIAL_ENCRYPTION_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
+      ADMIN_PHONE: "+254700000001"
+      ADMIN_FIRST_NAME: CI
+      ADMIN_LAST_NAME: Admin
+      SMS_MODE: console
+      FRONTEND_URL: https://app.example.invalid
+      PUBLIC_API_URL: https://api.example.invalid
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # Only what the server needs to run: proves nothing it uses at run time is a
+      # development tool, which Render may leave out.
+      - name: Install as for production
+        run: npm ci --omit=dev
+
+      - name: Start with npm start, as Render does, and check it answers
+        run: |
+          npm start > server.log 2>&1 &
+          pid=$!
+
+          for second in $(seq 1 60); do
+            if curl -fs http://localhost:10000/health > /dev/null; then break; fi
+            if ! kill -0 "$pid" 2> /dev/null; then break; fi
+            sleep 1
+          done
+
+          if ! curl -fs http://localhost:10000/health; then
+            echo "The server did not start:"
+            cat server.log
+            exit 1
+          fi
+
+          expect() {
+            status=$(curl -s -o /dev/null -w "%{http_code}" "$@")
+            if [ "$status" != "$expected" ]; then
+              echo "Expected $expected for $*, got $status"
+              cat server.log
+              exit 1
+            fi
+          }
+
+          expected=401 expect http://localhost:10000/api/auth/me
+          expected=401 expect -X POST "http://localhost:10000/api/live/ticket?for=admin"
+          expected=401 expect "http://localhost:10000/api/live/stream?ticket=x"
+          expected=404 expect http://localhost:10000/api/no-such-route
+
+          if ! grep -q "\[LIVE\] Listening for bell changes." server.log; then
+            echo "Live bells did not start:"
+            cat server.log
+            exit 1
+          fi
+
+          echo "Deploy rehearsal passed"
+          kill "$pid"
+          wait "$pid" || true
+
   secrets:
     name: No secrets in the code
     runs-on: ubuntu-latest
