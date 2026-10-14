@@ -246,7 +246,46 @@ function verify_refresh_token(token) {
   );
 }
 
+/*
+  A one-minute pass for the live notification connection (see
+  src/live). It cannot be used as a sign-in token: its type is
+  "live", and every route checks for "access".
+*/
+function create_live_ticket({ user_id, session_id, scope, owner_id }) {
+  return jwt.sign(
+    {
+      user_id,
+      sid: String(session_id),
+      scope,
+      owner_id,
+      type: "live",
+    },
+    process.env.JWT_ACCESS_SECRET,
+    {
+      expiresIn: 60,
+      issuer: ISSUER,
+      audience: audience(),
+    }
+  );
+}
+
+function verify_live_ticket(ticket) {
+  const decoded = jwt.verify(
+    ticket,
+    process.env.JWT_ACCESS_SECRET,
+    verify_options()
+  );
+
+  if (decoded.type !== "live" || !decoded.sid) {
+    throw new Error("Not a live connection pass.");
+  }
+
+  return decoded;
+}
+
 module.exports = {
+  create_live_ticket,
+  verify_live_ticket,
   needs_name,
   public_user,
   issue_tokens,

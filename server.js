@@ -42,6 +42,14 @@ const {
 const {
   init_idempotency_tables,
 } = require("./src/middleware/idempotency");
+
+const {
+  init_live_tables,
+} = require("./src/live/live_tables");
+
+const {
+  start_live_listener,
+} = require("./src/live/live_service");
 const {
   init_agreement_tables,
 } = require("./src/agreements/agreement_tables");
@@ -119,6 +127,7 @@ async function start_server() {
     await init_settings_tables();
     await init_reminder_tables();
     await init_file_tables();
+    await init_live_tables();
 
     console.log("[PAYMENTS] Tables are ready.");
 
@@ -143,6 +152,8 @@ async function start_server() {
     start_water_reminder_scheduler();
 
     start_payment_reminder_scheduler();
+
+    await start_live_listener();
 
     console.log("[BILLING] Monthly billing scheduler started.");
 
