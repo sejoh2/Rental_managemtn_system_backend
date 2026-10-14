@@ -192,6 +192,15 @@ async function request_otp(phone_input, ip_address) {
           "Do not share this code.",
       });
     } catch (sms_error) {
+      /*
+        The person signing in sees a plain message; the reason
+        from the SMS provider goes to the server log only.
+      */
+      console.error(
+        `[AUTH] The sign-in code SMS to ...${String(phone).slice(-3)} failed:`,
+        sms_error.message
+      );
+
       await db.query(
         `
           UPDATE otp_codes
