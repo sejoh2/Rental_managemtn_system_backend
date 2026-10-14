@@ -1,0 +1,166 @@
+# Checks every change before it reaches the test branch, and test before it reaches main.
+# Render deploys main; set its Auto-Deploy to "After CI checks pass".
+name: CI
+
+on:
+  pull_request:
+    branches: [test, main]
+  push:
+    branches: [test, main]
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run, to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Code checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Every file is valid JavaScript
+        run: |
+          find . -name "*.js" -not -path "./node_modules/*" -print0 \
+            | xargs -0 -n 1 node --check
+
+      - name: The app loads
+        run: node -e "require('./app.js'); console.log('app.js loads'); setTimeout(() => process.exit(0), 300)"
+
+      - name: The API description is valid YAML
+        run: node -e "require('yaml').parse(require('fs').readFileSync('docs/openapi.yaml', 'utf8')); console.log('openapi.yaml parses')"
+
+      - name: Tests
+        run: npm test
+
+  dependencies:
+    name: Known vulnerabilities in dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Only what runs on the server (not nodemon). "critical" for now: the
+      # africastalking package pulls in an old axios flagged "high" with no
+      # fixed version yet. Raise to "high" once that is replaced.
+      - run: npm audit --omit=dev --audit-level=critical
+
+  startup:
+    name: Starts on an empty database, twice
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rental_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # Throwaway values for this run only. No real key or password is used in CI.
+    env:
+      NODE_ENV: test
+      PORT: 8080
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rental_ci
+      DB_SSL: "false"
+      JWT_ACCESS_SECRET: ci-access-secret-not-used-anywhere-else
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-used-anywhere-else
+      PAYMENT_CREDENTIAL_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      ADMIN_PHONE: "+254700000000"
+      ADMIN_FIRST_NAME: CI
+      ADMIN_LAST_NAME: Admin
+      SMS_MODE: console
+      FRONTEND_URL: http://localhost:5173
+      PUBLIC_API_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The tables are created at start-up. Starting a second time proves every
+      # table step is safe to run again, as it is on every deploy.
+      - name: Start, check, stop - twice
+        run: |
+          for attempt in 1 2; do
+            node server.js > "server-$attempt.log" 2>&1 &
+            pid=$!
+
+            for second in $(seq 1 60); do
+              if curl -fs http://localhost:8080/health > /dev/null; then break; fi
+              if ! kill -0 "$pid" 2> /dev/null; then break; fi
+              sleep 1
+            done
+
+            if ! curl -fs http://localhost:8080/health; then
+              echo "Start $attempt failed:"
+              cat "server-$attempt.log"
+              exit 1
+            fi
+
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/auth/me)
+            if [ "$status" != "401" ]; then
+              echo "Expected 401 without a sign-in, got $status"
+              exit 1
+            fi
+
+            echo "Start $attempt: healthy"
+            kill "$pid"
+            wait "$pid" || true
+          done
+
+  secrets:
+    name: No secrets in the code
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-review:
+    name: New dependencies are safe
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

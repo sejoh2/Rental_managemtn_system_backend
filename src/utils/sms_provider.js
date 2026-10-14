@@ -1,18 +1,76 @@
-let sms_client = null;
+/*
+  Africa's Talking's messaging API, called directly. Their Node
+  package was dropped because it brought in an old version of
+  axios with known security problems. The test account named
+  "sandbox" has its own address.
+*/
+const LIVE_URL = "https://api.africastalking.com/version1/messaging";
+const SANDBOX_URL =
+  "https://api.sandbox.africastalking.com/version1/messaging";
+const TIMEOUT_MS = 20000;
 
-function get_sms_client() {
-  if (sms_client) {
-    return sms_client;
+async function send_with_africastalking({ phone, message, sender_id }) {
+  const username = process.env.AFRICASTALKING_USERNAME;
+
+  const form = new URLSearchParams({
+    username,
+    to: phone,
+    message,
+  });
+
+  if (sender_id) {
+    form.set("from", sender_id);
   }
 
-  const africastalking = require("africastalking");
+  let response;
 
-  sms_client = africastalking({
-    username: process.env.AFRICASTALKING_USERNAME,
-    apiKey: process.env.AFRICASTALKING_API_KEY,
-  }).SMS;
+  try {
+    response = await fetch(
+      username === "sandbox" ? SANDBOX_URL : LIVE_URL,
+      {
+        method: "POST",
+        headers: {
+          apiKey: process.env.AFRICASTALKING_API_KEY,
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: form,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      }
+    );
+  } catch (error) {
+    throw new Error(
+      error.name === "TimeoutError"
+        ? "Africa's Talking did not answer in time. The message was not sent."
+        : "Africa's Talking could not be reached. The message was not sent."
+    );
+  }
 
-  return sms_client;
+  const text = await response.text();
+  let body = null;
+
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+
+  /*
+    A refused request (a wrong API key or username, for example)
+    answers with a status above 299, often in plain text.
+  */
+  if (!response.ok) {
+    const reason =
+      body?.SMSMessageData?.Message ||
+      text.trim().slice(0, 200) ||
+      `status ${response.status}`;
+
+    throw new Error(
+      `Africa's Talking refused the request: ${reason}.`
+    );
+  }
+
+  return body;
 }
 
 /*
@@ -87,13 +145,6 @@ async function send_sms({
     throw new Error("SMS_MODE must be console or live.");
   }
 
-  const sms = get_sms_client();
-
-  const options = {
-    to: [phone],
-    message,
-  };
-
   /*
     Property sender ID takes priority. If a property does not have one,
     use the default sender ID from .env.
@@ -103,11 +154,11 @@ async function send_sms({
     process.env.AFRICASTALKING_SENDER_ID ||
     null;
 
-  if (final_sender_id) {
-    options.senderId = final_sender_id;
-  }
-
-  const response = await sms.send(options);
+  const response = await send_with_africastalking({
+    phone,
+    message,
+    sender_id: final_sender_id,
+  });
 
   check_provider_response(response, final_sender_id);
 
