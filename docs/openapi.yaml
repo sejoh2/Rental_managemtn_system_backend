@@ -112,6 +112,16 @@ paths:
     post:
       tags: [Step 1 - Authentication]
       summary: Refresh access token
+      description: |
+        Each sign-in is a session (a row of refresh_tokens). Both tokens
+        carry its ID (`sid`), the issuer `rental-api` and the audience
+        `rental-app-<NODE_ENV>` (or JWT_AUDIENCE). Every request checks that
+        the session is still open, so signing out, or an administrator
+        ending a user's sessions, takes effect on the next request.
+
+        Renewing swaps the refresh token for a new one in the same session,
+        in one step: a refresh token works once. Tokens from another
+        installation or database are refused.
       requestBody:
         required: true
         content:

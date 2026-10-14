@@ -30,6 +30,29 @@ async function get_user_by_id(user_id) {
   return result.rows[0] || null;
 }
 
+/*
+  The user of a sign-in session that is still open: not ended
+  by signing out or by an administrator, and not run out.
+  Checked on every request, in the same query as the user.
+*/
+async function get_user_for_session(user_id, session_id) {
+  const result = await db.query(
+    `
+      SELECT users.*
+      FROM users
+      INNER JOIN refresh_tokens
+        ON refresh_tokens.user_id = users.user_id
+      WHERE users.user_id = $1
+        AND refresh_tokens.refresh_token_id = $2
+        AND refresh_tokens.revoked_at IS NULL
+        AND refresh_tokens.expires_at > CURRENT_TIMESTAMP
+    `,
+    [user_id, session_id]
+  );
+
+  return result.rows[0] || null;
+}
+
 async function get_user_by_phone(phone, client = db) {
   const result = await client.query(
     `
@@ -408,54 +431,29 @@ async function refresh(refresh_token) {
     throw new Error("Invalid refresh token.");
   }
 
+  if (!decoded.sid) {
+    throw new Error("Invalid refresh token.");
+  }
+
   const user = await get_user_by_id(decoded.user_id);
 
   if (!user || user.status !== "active") {
     throw new Error("Invalid refresh token.");
   }
 
-  const result = await db.query(
-    `
-      SELECT *
-      FROM refresh_tokens
-      WHERE user_id = $1
-        AND revoked_at IS NULL
-        AND expires_at > CURRENT_TIMESTAMP
-      ORDER BY created_at DESC
-    `,
-    [user.user_id]
+  const renewed = await token_service.renew_session(
+    user,
+    decoded.sid,
+    refresh_token
   );
 
-  const stored_token = [];
-
-  for (const token of result.rows) {
-    if (
-      await bcrypt.compare(
-        refresh_token,
-        token.token_hash
-      )
-    ) {
-      stored_token.push(token);
-      break;
-    }
-  }
-
-  if (!stored_token[0]) {
+  if (!renewed) {
     throw new Error("Invalid refresh token.");
   }
 
-  await db.query(
-    `
-      UPDATE refresh_tokens
-      SET revoked_at = CURRENT_TIMESTAMP
-      WHERE refresh_token_id = $1
-    `,
-    [stored_token[0].refresh_token_id]
-  );
-
   return {
     user: token_service.public_user(user),
-    ...(await token_service.issue_tokens(user)),
+    ...renewed,
   };
 }
 
@@ -464,42 +462,20 @@ async function logout(refresh_token, ip_address) {
     const decoded =
       token_service.verify_refresh_token(refresh_token);
 
-    const result = await db.query(
-      `
-        SELECT *
-        FROM refresh_tokens
-        WHERE user_id = $1
-          AND revoked_at IS NULL
-      `,
-      [decoded.user_id]
+    const ended = await token_service.end_session(
+      decoded.user_id,
+      decoded.sid,
+      refresh_token
     );
 
-    for (const token of result.rows) {
-      if (
-        await bcrypt.compare(
-          refresh_token,
-          token.token_hash
-        )
-      ) {
-        await db.query(
-          `
-            UPDATE refresh_tokens
-            SET revoked_at = CURRENT_TIMESTAMP
-            WHERE refresh_token_id = $1
-          `,
-          [token.refresh_token_id]
-        );
-
-        await log_audit({
-          user_id: decoded.user_id,
-          action: "LOGOUT",
-          entity_type: "authentication",
-          entity_id: decoded.user_id,
-          ip_address,
-        });
-
-        break;
-      }
+    if (ended) {
+      await log_audit({
+        user_id: decoded.user_id,
+        action: "LOGOUT",
+        entity_type: "authentication",
+        entity_id: decoded.user_id,
+        ip_address,
+      });
     }
   } catch {
     /*
@@ -569,6 +545,7 @@ async function set_name(user, full_name, ip_address) {
 module.exports = {
   set_name,
   get_user_by_id,
+  get_user_for_session,
   request_otp,
   verify_otp,
   refresh,

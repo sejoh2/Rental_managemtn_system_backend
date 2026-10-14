@@ -2,6 +2,7 @@ const token_service = require("../security/token_service");
 
 const {
   get_user_by_id,
+  get_user_for_session,
 } = require("./auth_service");
 
 const {
@@ -38,7 +39,19 @@ async function authenticate(req, res, next) {
       throw new Error("Invalid token type.");
     }
 
-    const user = await get_user_by_id(decoded.user_id);
+    /*
+      The session the token belongs to must still be open:
+      signing out, or an administrator ending it, takes effect
+      on the next request rather than when the token runs out.
+    */
+    if (!decoded.sid) {
+      throw new Error("Invalid token.");
+    }
+
+    const user = await get_user_for_session(
+      decoded.user_id,
+      decoded.sid
+    );
 
     if (!user || user.status !== "active") {
       throw new Error("User is unavailable.");
