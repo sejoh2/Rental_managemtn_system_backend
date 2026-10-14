@@ -148,22 +148,46 @@ async function assign_caretaker(
       [phone]
     );
 
-    const user = user_result.rows[0];
+    let user = user_result.rows[0];
 
     /*
-      A person must first authenticate as a normal user.
+      An owner may add a caretaker whose number has never
+      signed in. The account is created here, inside this
+      owner-only request, and the caretaker later proves they
+      hold the number through the normal OTP sign-in.
       No public endpoint can create a caretaker.
     */
     if (!user) {
-      const error = new Error(
-        "This phone number is not registered yet. Ask the person to sign in with OTP first, then add them as caretaker."
+      const created_user_result = await client.query(
+        `
+          INSERT INTO users (
+            phone,
+            role,
+            status
+          )
+          VALUES ($1, 'user', 'active')
+          RETURNING *
+        `,
+        [phone]
       );
 
-      error.status_code = 404;
-      throw error;
+      user = created_user_result.rows[0];
     }
 
-    if (user.status !== "active") {
+    const is_own_caretaker =
+      user.role === "caretaker" &&
+      Number(user.owner_id) === Number(owner.user_id);
+
+    /*
+      Removing a caretaker from their last property makes the
+      account inactive, so the owner must be able to assign
+      that same caretaker again. Suspended accounts stay blocked.
+    */
+    const can_be_assigned =
+      user.status === "active" ||
+      (user.status === "inactive" && is_own_caretaker);
+
+    if (!can_be_assigned) {
       const error = new Error(
         "Only an active user can become a caretaker."
       );

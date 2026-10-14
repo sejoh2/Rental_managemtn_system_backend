@@ -34,6 +34,20 @@ const mpesa_account_schema = z.object({
 const connect_account_schema = z.object({
   account_for: z.enum(["rent", "water"]),
   account: mpesa_account_schema,
+
+  /*
+    Only sent when an existing property is changing this
+    account, so it may keep its current business number.
+  */
+  property_id: z.coerce.number()
+    .int()
+    .positive()
+    .optional(),
+});
+
+const replace_account_schema = z.object({
+  account_for: z.enum(["rent", "water"]),
+  connection_id: z.string().uuid(),
 });
 
 const create_property_schema = z.object({
@@ -124,6 +138,45 @@ const create_property_schema = z.object({
   }
 });
 
+/*
+  Water rules, payment accounts, and the caretaker are
+  changed through their own endpoints.
+*/
+const update_property_schema = z.object({
+  name: z.string().trim().min(2).max(255).optional(),
+
+  location: z.string().trim().min(2).max(255).optional(),
+
+  property_type: z.enum([
+    "apartment_block",
+    "bedsitters",
+    "mixed_use",
+    "single_rooms",
+  ]).optional(),
+
+  expected_units: z.coerce.number()
+    .int()
+    .min(0)
+    .optional(),
+
+  rent_due_day: z.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional(),
+
+  sms_sender_id: z.string()
+    .trim()
+    .max(50)
+    .nullable()
+    .optional(),
+}).refine(
+  (data) => Object.keys(data).length > 0,
+  {
+    message: "Provide at least one field to update.",
+  }
+);
+
 function validate(schema, data) {
   const result = schema.safeParse(data);
 
@@ -149,4 +202,10 @@ module.exports = {
 
   validate_create_property: (data) =>
     validate(create_property_schema, data),
+
+  validate_replace_account: (data) =>
+    validate(replace_account_schema, data),
+
+  validate_update_property: (data) =>
+    validate(update_property_schema, data),
 };

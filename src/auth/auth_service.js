@@ -199,6 +199,8 @@ async function request_otp(phone_input, ip_address) {
         (Number(process.env.OTP_EXPIRES_MINUTES) || 5) * 60,
       resend_in_seconds:
         Number(process.env.OTP_RESEND_SECONDS) || 60,
+      max_attempts:
+        Number(process.env.OTP_MAX_ATTEMPTS) || 3,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -250,6 +252,13 @@ async function verify_otp(phone_input, code, ip_address) {
         [otp_record.otp_code_id]
       );
 
+      /*
+        Failed-verification bookkeeping must survive the error,
+        so it is committed before throwing. The ROLLBACK in the
+        catch block is then a harmless no-op.
+      */
+      await client.query("COMMIT");
+
       throw new Error("Invalid or expired verification code.");
     }
 
@@ -263,9 +272,14 @@ async function verify_otp(phone_input, code, ip_address) {
         [otp_record.otp_code_id]
       );
 
-      throw new Error(
+      await client.query("COMMIT");
+
+      const error = new Error(
         "Too many failed attempts. Request a new verification code."
       );
+
+      error.attempts_remaining = 0;
+      throw error;
     }
 
     const matches = await bcrypt.compare(
@@ -274,16 +288,42 @@ async function verify_otp(phone_input, code, ip_address) {
     );
 
     if (!matches) {
-      await client.query(
+      /*
+        The code is retired on the last allowed attempt, so it
+        cannot be guessed any further.
+      */
+      const attempt_result = await client.query(
         `
           UPDATE otp_codes
-          SET attempts = attempts + 1
+          SET
+            attempts = attempts + 1,
+            used_at = CASE
+              WHEN attempts + 1 >= max_attempts
+              THEN CURRENT_TIMESTAMP
+              ELSE used_at
+            END
           WHERE otp_code_id = $1
+          RETURNING attempts, max_attempts
         `,
         [otp_record.otp_code_id]
       );
 
-      throw new Error("Invalid or expired verification code.");
+      await client.query("COMMIT");
+
+      const attempts_remaining = Math.max(
+        attempt_result.rows[0].max_attempts -
+          attempt_result.rows[0].attempts,
+        0
+      );
+
+      const error = new Error(
+        attempts_remaining > 0
+          ? "Invalid or expired verification code."
+          : "Too many failed attempts. Request a new verification code."
+      );
+
+      error.attempts_remaining = attempts_remaining;
+      throw error;
     }
 
     let user = await get_user_by_phone(phone, client);
