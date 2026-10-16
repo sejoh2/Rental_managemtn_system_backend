@@ -28,6 +28,7 @@ const sms_routes = require("./src/sms/sms_routes");
 const report_routes = require("./src/reports/report_routes");
 const settings_routes = require("./src/settings/settings_routes");
 const admin_routes = require("./src/admin/admin_routes");
+const agent_data_routes = require("./src/agent_data/agent_data_routes");
 const reminder_routes = require("./src/reminders/reminder_routes");
 const file_routes = require("./src/files/file_routes");
 
@@ -87,6 +88,9 @@ app.use("/api/properties", property_routes);
   their owner-only check to every path that reaches them.
 */
 app.use("/api/admin", admin_routes);
+
+// The customer agent's read-only figures (own token, no user session).
+app.use("/api/agent-data", agent_data_routes);
 app.use("/api", unit_routes);
 app.use("/api", tenant_routes);
 app.use("/api", payment_routes);
