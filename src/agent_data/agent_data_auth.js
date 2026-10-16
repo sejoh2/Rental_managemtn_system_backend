@@ -9,8 +9,16 @@ const crypto = require("crypto");
 */
 const MIN_TOKEN_LENGTH = 32;
 
-function token_hash(value) {
-  return crypto.createHash("sha256").update(String(value)).digest();
+/*
+  Compared in constant time, byte for byte. A token of another length
+  is refused first: that tells nothing useful, as the token is a long
+  random value of a known length, not something a person chose.
+*/
+function same_token(given, expected) {
+  const a = Buffer.from(String(given), "utf8");
+  const b = Buffer.from(String(expected), "utf8");
+
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function authenticate_agent(req, res, next) {
@@ -26,11 +34,7 @@ function authenticate_agent(req, res, next) {
   const header = req.headers.authorization || "";
   const given = header.startsWith("Bearer ") ? header.slice(7) : "";
 
-  // Both sides hashed first, so the comparison takes the same time whatever was sent.
-  if (
-    !given ||
-    !crypto.timingSafeEqual(token_hash(given), token_hash(expected))
-  ) {
+  if (!given || !same_token(given, expected)) {
     return res.status(401).json({
       success: false,
       error: "Not allowed.",
