@@ -1,6 +1,10 @@
 const db = require("../config/db");
 
 const {
+  assert_can_send_sms,
+} = require("../subscriptions/subscription_access");
+
+const {
   send_sms,
 } = require("../utils/sms_provider");
 
@@ -1121,6 +1125,8 @@ async function dispatch_broadcast(
 
   for (const message of messages.rows) {
     try {
+      await assert_can_send_sms(message.owner_id);
+
       const result = await send_sms({
         phone: message.recipient_phone,
         message: message.message,
@@ -1663,6 +1669,9 @@ async function cancel_broadcast(
 */
 async function deliver_message(message) {
   try {
+    // Nothing is sent for an account that is read-only (Kodi bill unpaid).
+    await assert_can_send_sms(message.owner_id);
+
     const result = await send_sms({
       phone: message.recipient_phone,
       message: message.message,

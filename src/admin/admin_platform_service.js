@@ -1,6 +1,10 @@
 const db = require("../config/db");
 
 const {
+  list_accounts: list_billing_accounts,
+} = require("../subscriptions/subscription_service");
+
+const {
   normalize_phone,
   mask_phone,
 } = require("../utils/phone");
@@ -360,6 +364,32 @@ async function get_notifications() {
     waiting.rows[0].pending_sender_ids
   );
 
+  /*
+    Kodi billing: landlords unpaid for 60 days or more, and M-Pesa
+    payments that need the admin (a result that did not match, or
+    money that could not be matched to a bill) in the last 30 days.
+  */
+  const billing_accounts = await list_billing_accounts();
+
+  const long_unpaid = billing_accounts
+    .filter((account) => account.days_overdue >= 60)
+    .map((account) => ({
+      owner_id: account.owner_id,
+      name: `${account.first_name} ${account.last_name}`.trim(),
+      days_overdue: account.days_overdue,
+    }));
+
+  const payment_problems = Number(
+    (
+      await db.query(`
+        SELECT COUNT(*) AS count
+        FROM audit_logs
+        WHERE action IN ('SUBSCRIPTION_PAYMENT_RESULT_MISMATCH', 'SUBSCRIPTION_PAYMENT_UNAPPLIED')
+          AND created_at > CURRENT_TIMESTAMP - INTERVAL '30 days'
+      `)
+    ).rows[0].count
+  );
+
   const waiting_for_access = Number(
     waiting.rows[0].waiting_for_access
   );
@@ -368,10 +398,14 @@ async function get_notifications() {
     pending_sender_ids,
     waiting_for_access,
     security,
+    long_unpaid,
+    payment_problems,
     total:
       pending_sender_ids +
       waiting_for_access +
-      security.length,
+      security.length +
+      long_unpaid.length +
+      payment_problems,
   };
 }
 

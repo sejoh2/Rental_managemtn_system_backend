@@ -3,6 +3,15 @@ const auth_service = require("./auth_service");
 const token_service = require("../security/token_service");
 
 const {
+  account_status,
+  ensure_monthly_invoice,
+} = require("../subscriptions/subscription_service");
+
+const {
+  account_owner_id,
+} = require("../subscriptions/subscription_access");
+
+const {
   validate_request_otp,
   validate_verify_otp,
   validate_refresh_token,
@@ -78,11 +87,52 @@ async function logout(req, res) {
   });
 }
 
-async function me(req, res) {
-  return res.status(200).json({
-    success: true,
-    user: token_service.public_user(req.user),
-  });
+async function me(req, res, next) {
+  try {
+    return res.status(200).json({
+      success: true,
+      user: token_service.public_user(req.user),
+      subscription: await subscription_summary(req.user),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/*
+  Where the account stands with its Kodi bill, for the banner on
+  every page (web and phone app). Caretakers see the state only.
+*/
+async function subscription_summary(user) {
+  const owner_id = account_owner_id(user);
+
+  if (!owner_id) {
+    return null;
+  }
+
+  const status = await account_status(owner_id);
+  const summary = {
+    state: status.state,
+    read_only: status.read_only,
+    covered_until: status.covered_until,
+    grace_ends_on: status.grace_ends_on,
+    days_left: status.days_left,
+  };
+
+  if (user.role !== "owner") {
+    return summary;
+  }
+
+  // Past the cover, the bill exists (made here if the job has not run yet).
+  const { invoice } = ["grace", "read_only"].includes(status.state)
+    ? await ensure_monthly_invoice(owner_id)
+    : { invoice: null };
+
+  return {
+    ...summary,
+    trial_ends_on: status.trial_ends_on,
+    amount_due: invoice?.status === "open" ? invoice.amount_due : null,
+  };
 }
 
 async function set_name(req, res, next) {

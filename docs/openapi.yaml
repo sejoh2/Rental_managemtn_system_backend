@@ -28,6 +28,7 @@ tags:
   - name: Health
   - name: Step 1 - Authentication
   - name: Step 2 - Admin users
+  - name: Kodi billing
   - name: Step 3 - Properties and M-Pesa
   - name: Step 4 - Units
   - name: Step 5 - Tenants
@@ -208,6 +209,142 @@ paths:
                 $ref: "#/components/schemas/CurrentUserResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
+
+  /api/subscriptions:
+    get:
+      tags: [Kodi billing]
+      summary: The owner's Kodi plan, bills and payments
+      description: |
+        Owners only (and the admin inside an owner's account). `status`
+        (state trial, active, grace or read_only; covered_until,
+        grace_ends_on, monthly_price), `open_invoice`, enabled prepaid
+        `plans` with their price, `invoices`, `payments`, `discount`,
+        `pending_payment` and `sign_in_phone`. Amounts are whole
+        shillings. A read-only account can still read, download and
+        pay; every other change is refused with 403 and
+        `code: account_read_only` (owners and their caretakers).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Billing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/subscriptions/pay:
+    post:
+      tags: [Kodi billing]
+      summary: Send the M-Pesa prompt to pay Kodi
+      description: |
+        STK push (Buy Goods) to Kodi's till for the open bill, or for a
+        prepaid plan (`plan_months`). The amount always comes from the
+        bill. `phone` defaults to the owner's sign-in phone. One prompt
+        per 90 seconds and 3 per 10 minutes per owner. 503 when Kodi's
+        till is not set up on the server.
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                phone:
+                  type: string
+                  example: "0712345678"
+                plan_months:
+                  type: integer
+                  nullable: true
+                  example: 6
+      responses:
+        "200":
+          description: Prompt sent; `stk_id` to follow it
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/subscriptions/payment-requests/{stk_id}:
+    get:
+      tags: [Kodi billing]
+      summary: How a prompt ended
+      description: sent, confirming, paid, failed, cancelled or expired.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stk_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/subscriptions/receipts/{payment_id}:
+    get:
+      tags: [Kodi billing]
+      summary: Receipt PDF for one of the owner's payments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: PDF (not cached)
+        "404":
+          description: Not this owner's payment
+
+  /api/subscriptions/stk-result/{secret}:
+    post:
+      tags: [Kodi billing]
+      summary: Safaricom's STK result (public)
+      description: |
+        Called by Safaricom only; the secret is KODI_MPESA_RESULT_SECRET
+        (a wrong one answers 404). Always answers `{ ResultCode: 0 }`;
+        a payment counts only for a request Kodi made, with the same
+        amount, an unused receipt, and after Safaricom confirms it
+        (STK Query).
+      responses:
+        "200":
+          description: Accepted
+
+  /api/admin/billing:
+    get:
+      tags: [Kodi billing]
+      summary: Admin billing page
+      description: |
+        Admin only. `settings` (monthly_price, grace_days), all `plans`,
+        every owner's state in `accounts`, and whether M-Pesa is set up.
+        Admin changes (all need `reason`, all audited with before and
+        after): PUT /settings, PUT /plans/{months},
+        GET /owners/{owner_id}, POST /owners/{owner_id}/extend-trial,
+        /free-months, /discounts, /request-payment,
+        POST /discounts/{discount_id}/end,
+        PUT /invoices/{invoice_id}/amount (lower only; the rest
+        `forgive` or `carry` to the next bill),
+        POST /invoices/{invoice_id}/payments (cash, bank, other; the
+        bill's full amount), GET /receipts/{payment_id}.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Billing overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
 
   /api/admin/overview:
     get:
