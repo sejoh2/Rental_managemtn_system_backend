@@ -74,6 +74,13 @@ router.get("/summary", async (req, res) => {
   return res.status(200).json({ success: true, ...result });
 });
 
+// Checked every few minutes: not written to the audit log each time (it holds no personal data).
+router.get("/signals", async (req, res) => {
+  validate(z.object({}).strict(), req.query);
+
+  return res.status(200).json({ success: true, signals: await agent_data_service.signals() });
+});
+
 router.get("/landlords", async (req, res) => {
   const query = validate(landlords_schema, req.query);
   const result = await agent_data_service.landlords(query);

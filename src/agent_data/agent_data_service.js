@@ -190,8 +190,47 @@ async function landlords({ days, q, sort, limit, owner_id = null }) {
   return { period_days: days, total_landlords: total, landlords: rows };
 }
 
+/*
+  Warning signs the agent checks every few minutes to alert the
+  owner (M5). Counts only: no names, phones or amounts.
+  - Failed sign-ins in the last hour, and the most for one number
+    (a possible attack).
+  - M-Pesa: payment notices from Safaricom in the last 24 hours, and
+    how many of them (older than 10 minutes, so not still being
+    processed) never became a payment in Kodi.
+  - Landlords' M-Pesa connection checks that failed in 24 hours.
+*/
+async function signals() {
+  return (
+    await db.query(`
+      SELECT
+        (SELECT COUNT(*)::INT FROM audit_logs
+          WHERE action = 'LOGIN_FAILED' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 hour') AS failed_sign_ins_last_hour,
+        (SELECT COALESCE(MAX(n), 0)::INT FROM (
+          SELECT COUNT(*) AS n FROM audit_logs
+          WHERE action = 'LOGIN_FAILED' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+          GROUP BY metadata->>'phone'
+        ) per_number) AS most_failed_sign_ins_one_number,
+        (SELECT COUNT(*)::INT FROM mpesa_c2b_callback_events
+          WHERE event_type = 'confirmation' AND received_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') AS mpesa_notices_24h,
+        (SELECT COUNT(*)::INT FROM mpesa_c2b_callback_events e
+          WHERE e.event_type = 'confirmation'
+            AND e.received_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+            AND e.received_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+            AND NOT EXISTS (
+              SELECT 1 FROM payments p WHERE p.provider_transaction_id = e.payload->>'TransID'
+            )) AS mpesa_notices_not_recorded_24h,
+        (SELECT COUNT(*)::INT FROM payments
+          WHERE status IN ('matched', 'unmatched') AND received_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') AS payments_24h,
+        (SELECT COUNT(*)::INT FROM property_connection_checks
+          WHERE status = 'failed' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') AS mpesa_connections_failed_24h
+    `)
+  ).rows[0];
+}
+
 module.exports = {
   summary,
   landlords,
+  signals,
   SORTS,
 };
