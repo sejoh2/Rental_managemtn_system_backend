@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const { rateLimit } = require("express-rate-limit");
 
 const {
   authenticate,
@@ -22,6 +23,16 @@ const { send_receipt, parse, respond } = require("./subscription_routes");
 */
 const router = express.Router();
 
+// Every admin billing request is limited per network address (well above normal use).
+const admin_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
+
+router.use(admin_limiter);
 router.use(authenticate);
 router.use(require_role("admin"));
 

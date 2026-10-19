@@ -81,12 +81,22 @@ router.get(
   respond(async () => subscriptions.public_pricing())
 );
 
+// Every signed-in billing request is limited per network address (well above normal use).
+const account_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
+
 /*
   Someone waiting for owner access says which card they picked on the
   home page, so the admin sees it with the new account.
 */
 router.put(
   "/requested-plan",
+  account_limiter,
   authenticate,
   require_role("user"),
   respond(async (req) => {
@@ -108,7 +118,7 @@ router.put(
   })
 );
 
-const owner_guard = [authenticate, require_role("owner")];
+const owner_guard = [account_limiter, authenticate, require_role("owner")];
 
 router.get("/", owner_guard, respond((req) => subscriptions.owner_summary(req.user.user_id)));
 
