@@ -885,11 +885,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessDataResponse"
 
-  /api/properties/c2b/validation:
+  /api/properties/c2b/validation/{callback_token}:
     post:
       tags: [Step 3 - Properties and M-Pesa]
       summary: Daraja C2B validation callback
-      description: Public callback called by Safaricom Daraja. No bearer token.
+      description: |
+        Public callback called by Safaricom Daraja. No bearer token.
+        `callback_token` is the payment account's secret (64 hex
+        characters), set when its addresses are registered.
+      parameters:
+        - name: callback_token
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -904,14 +913,26 @@ paths:
               schema:
                 $ref: "#/components/schemas/DarajaAcceptedResponse"
 
-  /api/properties/c2b/confirmation:
+  /api/properties/c2b/confirmation/{callback_token}:
     post:
       tags: [Step 3 - Properties and M-Pesa]
       summary: Daraja C2B confirmation callback
       description: |
         Public callback called by Safaricom Daraja after a payment.
-        The backend identifies the property account, matches tenant payment phone,
-        creates a payment, and applies money deposit-first.
+        Recorded only when `callback_token` is the secret kept for the
+        active account with the notice's BusinessShortCode (otherwise
+        404, audited MPESA_CALLBACK_REFUSED). Optional allow-list of
+        Safaricom addresses: MPESA_CALLBACK_ALLOWED_IPS. The backend
+        identifies the property account, matches tenant payment phone,
+        creates a payment, and applies money deposit-first. The old
+        `/api/properties/c2b/confirmation` without a secret answers
+        but records nothing (unless MPESA_C2B_ALLOW_LEGACY_CALLBACKS=true).
+      parameters:
+        - name: callback_token
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:

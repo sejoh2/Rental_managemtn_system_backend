@@ -384,7 +384,7 @@ async function get_notifications() {
       await db.query(`
         SELECT COUNT(*) AS count
         FROM audit_logs
-        WHERE action IN ('SUBSCRIPTION_PAYMENT_RESULT_MISMATCH', 'SUBSCRIPTION_PAYMENT_UNAPPLIED')
+        WHERE action IN ('SUBSCRIPTION_PAYMENT_RESULT_MISMATCH', 'SUBSCRIPTION_PAYMENT_UNAPPLIED', 'MPESA_CALLBACK_REFUSED')
           AND created_at > CURRENT_TIMESTAMP - INTERVAL '30 days'
       `)
     ).rows[0].count

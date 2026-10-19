@@ -361,6 +361,10 @@ async function init_property_tables() {
         )
       );
 
+    -- The secret in the account's M-Pesa notice address (encrypted).
+    ALTER TABLE payment_accounts
+      ADD COLUMN IF NOT EXISTS c2b_callback_token_encrypted TEXT;
+
     ALTER TABLE payment_accounts
       DROP CONSTRAINT IF EXISTS payment_accounts_account_for_check;
 

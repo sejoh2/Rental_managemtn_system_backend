@@ -17,13 +17,28 @@ const router = express.Router();
   They must appear before router.use(authenticate).
 */
 router.post(
+  "/c2b/validation/:callback_token",
+  property_controller.c2b_validation
+);
+
+router.post(
+  "/c2b/confirmation/:callback_token",
+  property_controller.c2b_confirmation
+);
+
+/*
+  The old addresses, without a secret: kept so Safaricom gets an
+  answer, but they no longer record payments (see
+  c2b_callback_security.js).
+*/
+router.post(
   "/c2b/validation",
   property_controller.c2b_validation
 );
 
 router.post(
   "/c2b/confirmation",
-  property_controller.c2b_confirmation
+  property_controller.legacy_c2b_confirmation
 );
 
 /*

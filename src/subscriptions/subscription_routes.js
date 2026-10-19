@@ -16,6 +16,7 @@ const subscriptions = require("./subscription_service");
 const payments = require("./subscription_payment_service");
 const mpesa = require("./subscription_mpesa");
 const { build_receipt, receipt_number } = require("./subscription_receipt");
+const { callback_ip_allowed } = require("../payments/mpesa/c2b_callback_security");
 
 /*
   The landlord's Billing tab (owners only; caretakers see the
@@ -58,7 +59,7 @@ function respond(handler, status = 200) {
 const result_limiter = rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: "draft-8", legacyHeaders: false });
 
 router.post("/stk-result/:secret", result_limiter, (req, res) => {
-  if (!mpesa.result_secret_matches(req.params.secret)) {
+  if (!callback_ip_allowed(req.ip) || !mpesa.result_secret_matches(req.params.secret)) {
     return res.status(404).json({ success: false, error: "Route not found." });
   }
 
