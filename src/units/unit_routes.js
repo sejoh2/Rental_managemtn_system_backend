@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const unit_controller = require("./unit_controller");
 
@@ -45,6 +46,18 @@ async function property_of_unit(req, owner_id) {
 
 const router = express.Router();
 
+/*
+  Per network address, far above what the phone app needs. Stops
+  anyone from flooding the server or the database.
+*/
+const unit_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
+
 
 /*
   Owners exclusively manage their units.
@@ -85,6 +98,7 @@ router.post(
 
 router.get(
   "/units/:unit_id",
+  unit_limiter,
   authenticate,
   require_role("owner", "caretaker"),
   as_owner({ property: property_of_unit }),

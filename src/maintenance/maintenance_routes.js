@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const maintenance_controller = require(
   "./maintenance_controller"
@@ -13,6 +14,18 @@ const {
 } = require("../middleware/role_middleware");
 
 const router = express.Router();
+
+/*
+  Per network address, far above what the phone app needs. Stops
+  anyone from flooding the server or the database.
+*/
+const notices_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
 
 
 /*
@@ -38,12 +51,14 @@ router.get(
 */
 router.get(
   "/maintenance/notices",
+  notices_limiter,
   guard,
   maintenance_controller.list_notices
 );
 
 router.post(
   "/maintenance/notices/seen",
+  notices_limiter,
   guard,
   maintenance_controller.mark_notices_seen
 );
