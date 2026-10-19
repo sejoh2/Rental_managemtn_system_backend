@@ -85,7 +85,7 @@ async function init_live_tables() {
 
     DROP TRIGGER IF EXISTS bell_maintenance ON maintenance_requests;
     CREATE TRIGGER bell_maintenance
-      AFTER INSERT OR DELETE OR UPDATE OF status ON maintenance_requests
+      AFTER INSERT OR DELETE OR UPDATE OF status, owner_notice ON maintenance_requests
       FOR EACH ROW
       EXECUTE FUNCTION announce_bell_change('owner');
 

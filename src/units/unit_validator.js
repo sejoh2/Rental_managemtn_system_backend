@@ -31,11 +31,12 @@ const unit_type_field = z.string()
       : value.replace(/\s+/g, " ")
   );
 
+/*
+  The owner can only set a unit vacant: it becomes occupied when a
+  tenant moves in, and inactive when it is taken out of use.
+*/
 const editable_statuses = [
   "vacant",
-  "reserved",
-  "maintenance",
-  "inactive",
 ];
 
 /*

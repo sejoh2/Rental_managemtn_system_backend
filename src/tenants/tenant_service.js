@@ -332,9 +332,9 @@ async function create_tenant(
       throw error;
     }
 
-    if (!["vacant", "reserved"].includes(unit.status)) {
+    if (unit.status !== "vacant") {
       const error = new Error(
-        "A tenant can only be added to a vacant or reserved unit."
+        "A tenant can only be added to a vacant unit."
       );
 
       error.status_code = 400;

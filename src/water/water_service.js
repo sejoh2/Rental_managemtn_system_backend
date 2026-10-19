@@ -350,8 +350,8 @@ async function update_water_rules(
       when the owner deliberately wants to change them.
     */
     const unit_statuses = data.apply_to_occupied_units
-      ? ["vacant", "reserved", "occupied"]
-      : ["vacant", "reserved"];
+      ? ["vacant", "occupied"]
+      : ["vacant"];
 
     await client.query(
       `

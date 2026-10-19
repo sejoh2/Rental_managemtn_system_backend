@@ -562,7 +562,14 @@ async function get_attention(owner) {
           FROM maintenance_requests
           WHERE owner_id = $1
             AND status IN ('reported', 'in_progress')
-        ) AS open_maintenance
+        ) AS open_maintenance,
+
+        (
+          SELECT COUNT(*)
+          FROM maintenance_requests
+          WHERE owner_id = $1
+            AND owner_notice = 'done'
+        ) AS repairs_done
     `,
     [owner.user_id]
   );
@@ -574,6 +581,8 @@ async function get_attention(owner) {
     flagged_readings: Number(row.flagged_readings),
     failed_sms: Number(row.failed_sms),
     open_maintenance: Number(row.open_maintenance),
+    // Marked done by the caretaker, not yet seen by the owner.
+    repairs_done: Number(row.repairs_done),
   };
 
   return {

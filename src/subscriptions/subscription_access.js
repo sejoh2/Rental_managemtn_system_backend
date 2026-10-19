@@ -12,7 +12,9 @@ const {
   blocked, also inside an owner's account.
 */
 
-const ALWAYS_ALLOWED = /^\/api\/(auth|subscriptions|admin|users)(\/|\?|$)|^\/api\/live\/ticket(\?|$)/;
+// Marking repairs as read changes nothing in the account, so it works while read-only too.
+const ALWAYS_ALLOWED =
+  /^\/api\/(auth|subscriptions|admin|users)(\/|\?|$)|^\/api\/live\/ticket(\?|$)|^\/api\/maintenance\/notices\/seen(\?|$)/;
 const READING = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function account_owner_id(user) {

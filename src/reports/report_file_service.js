@@ -147,10 +147,6 @@ function report_sections(report, report_type) {
         ["Occupied units", report.occupancy.occupied_units],
         ["Vacant units", report.occupancy.vacant_units],
         [
-          "Units under maintenance",
-          report.occupancy.maintenance_units,
-        ],
-        [
           "Occupancy rate",
           `${report.occupancy.occupancy_rate}%`,
         ],
