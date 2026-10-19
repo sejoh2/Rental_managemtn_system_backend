@@ -18,9 +18,10 @@ const {
 const router = express.Router();
 
 /*
-  Current Daraja callback URLs remain:
-  /api/properties/c2b/validation
-  /api/properties/c2b/confirmation
+  Daraja callback URLs, each with the payment account's secret:
+  /api/properties/c2b/validation/<secret>
+  /api/properties/c2b/confirmation/<secret>
+  (the old ones without a secret no longer record payments).
 
   The property confirmation controller delegates to
   payment_service.receive_mpesa_c2b_confirmation().

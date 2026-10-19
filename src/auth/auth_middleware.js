@@ -13,6 +13,10 @@ const {
   idempotency,
 } = require("../middleware/idempotency");
 
+const {
+  write_refusal,
+} = require("../subscriptions/subscription_access");
+
 /*
   The admin's own pages. The acting-owner header is ignored
   here, so the admin stays an admin on them.
@@ -64,6 +68,26 @@ async function authenticate(req, res, next) {
       own, also while working inside an owner's account).
     */
     req.session_id = decoded.sid;
+
+    /*
+      An account whose Kodi bill is unpaid after the grace days is
+      read-only: nothing may be added, changed or sent, by the
+      owner or their caretakers (web or phone app). The admin is
+      not blocked (checked again below for the acting admin).
+    */
+    if (user.role === "owner" || user.role === "caretaker") {
+      let refusal;
+
+      try {
+        refusal = await write_refusal(req);
+      } catch (error) {
+        return next(error);
+      }
+
+      if (refusal) {
+        return res.status(403).json(refusal);
+      }
+    }
 
     /*
       A repeat of a request that was already carried out (same
