@@ -252,20 +252,17 @@ async function finalize(stk_id, { receipt = null, phone = null } = {}) {
   Asks Safaricom how the request ended and acts on it. Used after a
   result message and for requests whose result never came.
 */
+// "Still processing": not an answer yet, whichever way Safaricom says it.
+const STILL_PROCESSING = new Set(["4999"]);
+
 async function confirm(stk) {
   let status;
 
   try {
     status = await mpesa.stk_status(stk.checkout_request_id);
   } catch (error) {
-    await db.query("UPDATE subscription_stk_requests SET checks = checks + 1 WHERE stk_id = $1", [stk.stk_id]);
-
-    if (!error.pending && stk.checks + 1 >= 15) {
-      await db.query(
-        "UPDATE subscription_stk_requests SET status = 'expired', result_desc = $2, completed_at = CURRENT_TIMESTAMP WHERE stk_id = $1 AND status IN ('sent', 'confirming')",
-        [stk.stk_id, `Safaricom could not confirm it: ${error.message}`.slice(0, 500)]
-      );
-    }
+    // No answer (still processing, asked too often, or unreachable): asked again later.
+    await db.query("UPDATE subscription_stk_requests SET last_checked_at = CURRENT_TIMESTAMP WHERE stk_id = $1", [stk.stk_id]);
 
     return "unknown";
   }
@@ -275,7 +272,7 @@ async function confirm(stk) {
     return "paid";
   }
 
-  if (status.result_code === null) return "unknown";
+  if (status.result_code === null || STILL_PROCESSING.has(status.result_code)) return "unknown";
 
   await subscriptions.in_transaction(async (client) => {
     const changed = (
@@ -373,17 +370,44 @@ function confirm_again_soon(stk_id, attempt = 0) {
 }
 
 // Requests without a result yet: asked about after a minute, then every minute.
+/*
+  Requests without an answer yet are asked about after 1, 2, 3, 5, 8,
+  13 and 20 minutes, then every 30 minutes (Safaricom refuses questions
+  asked too often), and closed as "no answer" after 2 hours. Each check
+  is claimed in the database first, so servers sharing it never ask
+  twice.
+*/
 async function check_waiting_requests() {
   await db.query(
     `UPDATE subscription_stk_requests SET status = 'expired', result_desc = 'The request was not sent.', completed_at = CURRENT_TIMESTAMP
      WHERE status = 'sending' AND created_at < CURRENT_TIMESTAMP - INTERVAL '2 minutes'`
   );
 
+  await db.query(
+    `UPDATE subscription_stk_requests
+     SET status = 'expired', result_desc = 'No answer from Safaricom within 2 hours. Check M-Pesa; record it by hand if the money arrived.', completed_at = CURRENT_TIMESTAMP
+     WHERE status IN ('sent', 'confirming') AND created_at < CURRENT_TIMESTAMP - INTERVAL '2 hours'`
+  );
+
   const waiting = (
     await db.query(
-      `SELECT * FROM subscription_stk_requests
-       WHERE status IN ('sent', 'confirming') AND created_at < CURRENT_TIMESTAMP - INTERVAL '1 minute'
-       ORDER BY created_at LIMIT 20`
+      `UPDATE subscription_stk_requests
+       SET last_checked_at = CURRENT_TIMESTAMP, checks = checks + 1
+       WHERE stk_id IN (
+         SELECT stk_id FROM subscription_stk_requests
+         WHERE status IN ('sent', 'confirming')
+           AND created_at < CURRENT_TIMESTAMP - INTERVAL '1 minute'
+           AND (
+             last_checked_at IS NULL
+             OR last_checked_at < CURRENT_TIMESTAMP - (CASE
+               WHEN checks < 3 THEN 1 WHEN checks = 3 THEN 2 WHEN checks = 4 THEN 3
+               WHEN checks = 5 THEN 5 WHEN checks = 6 THEN 7 ELSE 30 END) * INTERVAL '1 minute' + INTERVAL '5 seconds'
+           )
+         ORDER BY created_at
+         LIMIT 20
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING *`
     )
   ).rows;
 

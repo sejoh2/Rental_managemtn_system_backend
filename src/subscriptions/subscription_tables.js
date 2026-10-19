@@ -226,6 +226,19 @@ async function init_subscription_tables() {
       completed_at TIMESTAMPTZ
     );
 
+    -- When Safaricom was last asked about it (checks back off; several servers share the work).
+    ALTER TABLE subscription_stk_requests ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+
+    /*
+      "4999: still under processing" was once taken as a failure: such
+      requests from the last day are opened again and asked about.
+    */
+    UPDATE subscription_stk_requests
+    SET status = 'sent', completed_at = NULL, result_code = NULL,
+        result_desc = 'Reopened: Safaricom said it was still processing.'
+    WHERE status = 'failed' AND result_code = '4999'
+      AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 day';
+
     CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_stk_checkout
       ON subscription_stk_requests(checkout_request_id)
       WHERE checkout_request_id IS NOT NULL;
