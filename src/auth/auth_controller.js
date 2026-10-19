@@ -93,10 +93,30 @@ async function me(req, res, next) {
       success: true,
       user: token_service.public_user(req.user),
       subscription: await subscription_summary(req.user),
+      ...(req.user.role === "caretaker"
+        ? { owner: await owner_contact(req.user.owner_id) }
+        : {}),
     });
   } catch (error) {
     return next(error);
   }
+}
+
+/*
+  A caretaker's owner, for the "Call the owner" button in the
+  phone app's Profile.
+*/
+async function owner_contact(owner_id) {
+  const owner = owner_id ? await auth_service.get_user_by_id(owner_id) : null;
+
+  if (!owner) {
+    return null;
+  }
+
+  return {
+    full_name: [owner.first_name, owner.last_name].filter(Boolean).join(" ") || null,
+    phone: owner.phone || null,
+  };
 }
 
 /*

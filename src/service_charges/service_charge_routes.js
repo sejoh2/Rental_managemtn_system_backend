@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const service_charge_controller = require(
   "./service_charge_controller"
@@ -12,7 +13,24 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+  property_in_path,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
+
+/*
+  Per network address, far above what the phone app needs. Stops
+  anyone from flooding the server or the database.
+*/
+const read_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
 
 /*
   The guard is attached to each route, not to the whole router.
@@ -24,9 +42,16 @@ const guard = [
   require_role("owner"),
 ];
 
+/*
+  The caretaker of the property may see its charges, for the
+  move-in costs shown when they add a tenant.
+*/
 router.get(
   "/properties/:property_id/service-charges",
-  guard,
+  read_limiter,
+  authenticate,
+  require_role("owner", "caretaker"),
+  as_owner({ property: property_in_path }),
   service_charge_controller.list_service_charges
 );
 

@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const unit_controller = require("./unit_controller");
 
@@ -15,7 +16,47 @@ const {
   property_in_path,
 } = require("../caretakers/caretaker_acting");
 
+const db = require("../config/db");
+
+/*
+  The property of the unit in /units/:unit_id, if it is in the
+  owner's account (units carry no owner of their own).
+*/
+async function property_of_unit(req, owner_id) {
+  const unit_id = Number(req.params.unit_id);
+
+  if (!Number.isInteger(unit_id) || unit_id < 1) {
+    return null;
+  }
+
+  const result = await db.query(
+    `
+      SELECT units.property_id
+      FROM units
+      INNER JOIN properties
+        ON properties.id = units.property_id
+      WHERE units.id = $1
+        AND properties.owner_id = $2
+    `,
+    [unit_id, owner_id]
+  );
+
+  return result.rows[0]?.property_id || null;
+}
+
 const router = express.Router();
+
+/*
+  Per network address, far above what the phone app needs. Stops
+  anyone from flooding the server or the database.
+*/
+const unit_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
 
 
 /*
@@ -57,7 +98,10 @@ router.post(
 
 router.get(
   "/units/:unit_id",
-  guard,
+  unit_limiter,
+  authenticate,
+  require_role("owner", "caretaker"),
+  as_owner({ property: property_of_unit }),
   unit_controller.get_unit
 );
 
