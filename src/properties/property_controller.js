@@ -1,6 +1,15 @@
 const property_service = require("./property_service");
 
 const {
+  log_audit,
+} = require("../audit/audit_service");
+
+const {
+  callback_ip_allowed,
+  legacy_callbacks_allowed,
+} = require("../payments/mpesa/c2b_callback_security");
+
+const {
   validate_connect_account,
   validate_create_property,
   validate_update_property,
@@ -280,24 +289,74 @@ async function reregister_payment_account_c2b_urls(
   }
 }
 
+const accepted = (res) =>
+  res.status(200).json({
+    ResultCode: 0,
+    ResultDesc: "Accepted",
+  });
+
+/*
+  A payment notice Kodi does not record: kept in the audit log
+  (business number, transaction and network address only) so the
+  admin sees it.
+*/
+async function refuse_notice(req, reason, account = null) {
+  console.warn(`[MPESA] Payment notice refused: ${reason}`);
+
+  await log_audit({
+    user_id: null,
+    owner_id: account?.owner_id || null,
+    action: "MPESA_CALLBACK_REFUSED",
+    entity_type: "payment_account",
+    entity_id: account?.id || null,
+    metadata: {
+      reason,
+      business_number: req.body?.BusinessShortCode ? String(req.body.BusinessShortCode).slice(0, 20) : null,
+      transaction_id: req.body?.TransID ? String(req.body.TransID).slice(0, 30) : null,
+    },
+    ip_address: req.ip,
+  });
+}
+
 async function c2b_validation(req, res, next) {
   try {
+    if (!callback_ip_allowed(req.ip)) {
+      return res.status(403).json({ ResultCode: 1, ResultDesc: "Rejected" });
+    }
+
     await property_service.save_c2b_callback(
       "validation",
       req.body
     );
 
-    return res.status(200).json({
-      ResultCode: 0,
-      ResultDesc: "Accepted",
-    });
+    return accepted(res);
   } catch (error) {
     next(error);
   }
 }
 
+/*
+  Safaricom's payment notice, at the account's secret address. It is
+  recorded only when the address's secret is the one kept for the
+  account that owns the business number.
+*/
 async function c2b_confirmation(req, res, next) {
   try {
+    if (!callback_ip_allowed(req.ip)) {
+      await refuse_notice(req, "The notice came from a network address that is not Safaricom's.");
+      return res.status(403).json({ ResultCode: 1, ResultDesc: "Rejected" });
+    }
+
+    const check = await property_service.check_c2b_notice(
+      req.body,
+      req.params.callback_token
+    );
+
+    if (check.reason) {
+      await refuse_notice(req, check.reason, check.account);
+      return res.status(404).json({ success: false, error: "Route not found." });
+    }
+
     /*
       Keep the raw confirmation event for diagnostics.
     */
@@ -314,16 +373,46 @@ async function c2b_confirmation(req, res, next) {
       req.body
     );
 
-    return res.status(200).json({
-      ResultCode: 0,
-      ResultDesc: "Accepted",
-    });
+    return accepted(res);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/*
+  The old address without a secret. Safaricom gets its answer so it
+  stops retrying, but nothing is recorded, unless the short move
+  setting MPESA_C2B_ALLOW_LEGACY_CALLBACKS=true is on.
+*/
+async function legacy_c2b_confirmation(req, res, next) {
+  try {
+    if (!callback_ip_allowed(req.ip)) {
+      await refuse_notice(req, "The notice came from a network address that is not Safaricom's.");
+      return res.status(403).json({ ResultCode: 1, ResultDesc: "Rejected" });
+    }
+
+    await property_service.save_c2b_callback(
+      "confirmation",
+      req.body
+    );
+
+    if (!legacy_callbacks_allowed()) {
+      await refuse_notice(req, "The notice came to the old address without a secret: re-register this account's addresses.");
+      return accepted(res);
+    }
+
+    await payment_service.receive_mpesa_c2b_confirmation(
+      req.body
+    );
+
+    return accepted(res);
   } catch (error) {
     next(error);
   }
 }
 
 module.exports = {
+  legacy_c2b_confirmation,
   connect_payment_account,
   create_property,
   list_properties,

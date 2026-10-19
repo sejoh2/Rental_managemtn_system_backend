@@ -20,6 +20,13 @@ const {
   register_c2b_urls,
 } = require("../payments/mpesa/daraja_c2b_client");
 
+const {
+  new_callback_token,
+  seal_callback_token,
+  mask_callback_url,
+  callback_token_matches,
+} = require("../payments/mpesa/c2b_callback_security");
+
 function public_account(account) {
   return {
     id: Number(account.id),
@@ -35,6 +42,10 @@ function public_account(account) {
     connection_error: account.connection_error,
     callback_registered_at:
       account.callback_registered_at,
+    // Payment notices come to an address with this account's secret (never the secret itself).
+    notice_address_secured: Boolean(
+      account.c2b_callback_token_encrypted
+    ),
   };
 }
 
@@ -160,7 +171,11 @@ function duplicate_name_error(error) {
   return error;
 }
 
-function get_callback_urls() {
+/*
+  The addresses Safaricom sends one account's payment notices to,
+  with that account's secret (c2b_callback_security.js).
+*/
+function get_callback_urls(callback_token) {
   const public_api_url = String(
     process.env.PUBLIC_API_URL || ""
   ).replace(/\/$/, "");
@@ -173,10 +188,10 @@ function get_callback_urls() {
 
   return {
     validation_url:
-      `${public_api_url}/api/properties/c2b/validation`,
+      `${public_api_url}/api/properties/c2b/validation/${callback_token}`,
 
     confirmation_url:
-      `${public_api_url}/api/properties/c2b/confirmation`,
+      `${public_api_url}/api/properties/c2b/confirmation/${callback_token}`,
   };
 }
 
@@ -400,7 +415,8 @@ async function create_payment_account(
   owner_id,
   property_id,
   account_for,
-  connection
+  connection,
+  callback_token
 ) {
   const label = {
     rent: "Rent M-Pesa account",
@@ -423,13 +439,15 @@ async function create_payment_account(
         business_number,
         connection_status,
         callback_registered_at,
-        last_connection_test_at
+        last_connection_test_at,
+        c2b_callback_token_encrypted
       )
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,
         'connected',
         CURRENT_TIMESTAMP,
-        CURRENT_TIMESTAMP
+        CURRENT_TIMESTAMP,
+        $10
       )
       RETURNING id
     `,
@@ -443,6 +461,7 @@ async function create_payment_account(
       connection.account_name,
       label,
       connection.business_number,
+      seal_callback_token(callback_token),
     ]
   );
 
@@ -524,14 +543,19 @@ async function create_property(owner, data, ip_address) {
       );
     }
 
-    const { validation_url, confirmation_url } =
-      get_callback_urls();
-
     /*
       Daraja registration occurs only now, once every Connect
       check succeeded and the property is actually being created.
+      Each account gets its own secret notice address.
     */
-    for (const { connection } of connections) {
+    for (const item of connections) {
+      const { connection } = item;
+
+      item.callback_token = new_callback_token();
+
+      const { validation_url, confirmation_url } =
+        get_callback_urls(item.callback_token);
+
       const credentials = decrypt_json(
         connection.encrypted_credentials
       );
@@ -602,7 +626,8 @@ async function create_property(owner, data, ip_address) {
         owner.user_id,
         property_id,
         item.account_for,
-        item.connection
+        item.connection,
+        item.callback_token
       );
     }
 
@@ -799,8 +824,10 @@ async function replace_payment_account(
       account?.id || null
     );
 
+    const callback_token = new_callback_token();
+
     const { validation_url, confirmation_url } =
-      get_callback_urls();
+      get_callback_urls(callback_token);
 
     const credentials = decrypt_json(
       connection.encrypted_credentials
@@ -845,7 +872,8 @@ async function replace_payment_account(
             connection_error = NULL,
             callback_registered_at = CURRENT_TIMESTAMP,
             last_connection_test_at = CURRENT_TIMESTAMP,
-            status = 'active'
+            status = 'active',
+            c2b_callback_token_encrypted = $7
           WHERE id = $6
         `,
         [
@@ -855,6 +883,7 @@ async function replace_payment_account(
           connection.account_name,
           connection.business_number,
           account.id,
+          seal_callback_token(callback_token),
         ]
       );
 
@@ -891,7 +920,8 @@ async function replace_payment_account(
         owner.user_id,
         property_id,
         account_for,
-        connection
+        connection,
+        callback_token
       );
     }
 
@@ -1228,10 +1258,13 @@ async function reregister_payment_account_c2b_urls(
     throw error;
   }
 
+  // A new secret each time, so an address that leaked stops working.
+  const callback_token = new_callback_token();
+
   const {
     validation_url,
     confirmation_url,
-  } = get_callback_urls();
+  } = get_callback_urls(callback_token);
 
   let daraja_response;
 
@@ -1293,8 +1326,8 @@ async function reregister_payment_account_c2b_urls(
         account_for: account.account_for,
         business_number: account.business_number,
         environment: account.environment,
-        validation_url,
-        confirmation_url,
+        validation_url: mask_callback_url(validation_url),
+        confirmation_url: mask_callback_url(confirmation_url),
         error: daraja_message,
       },
       ip_address,
@@ -1313,12 +1346,19 @@ async function reregister_payment_account_c2b_urls(
       UPDATE payment_accounts
       SET
         connection_status = 'connected',
-        connection_error = NULL,
+        connection_error = $2,
         callback_registered_at = CURRENT_TIMESTAMP,
-        last_connection_test_at = CURRENT_TIMESTAMP
+        last_connection_test_at = CURRENT_TIMESTAMP,
+        c2b_callback_token_encrypted = $3
       WHERE id = $1
     `,
-    [account.id]
+    [
+      account.id,
+      daraja_response?.already_registered
+        ? "Safaricom says this number's notice address was already registered. If payments stop appearing, ask Safaricom to remove the old address (Daraja portal) and register again."
+        : null,
+      seal_callback_token(callback_token),
+    ]
   );
 
   await db.query(
@@ -1343,8 +1383,8 @@ async function reregister_payment_account_c2b_urls(
       account_for: account.account_for,
       business_number: account.business_number,
       environment: account.environment,
-      validation_url,
-      confirmation_url,
+      validation_url: mask_callback_url(validation_url),
+      confirmation_url: mask_callback_url(confirmation_url),
       daraja_response,
     },
     ip_address,
@@ -1357,12 +1397,57 @@ async function reregister_payment_account_c2b_urls(
       connection_error: null,
       callback_registered_at: new Date(),
     }),
+    // The secret stays on the server.
     callback_urls: {
-      validation_url,
-      confirmation_url,
+      validation_url: mask_callback_url(validation_url),
+      confirmation_url: mask_callback_url(confirmation_url),
     },
     daraja_response,
   };
+}
+
+/*
+  The account a payment notice belongs to, checked against the
+  secret in the address it came to. -> { account } or { reason }
+*/
+async function check_c2b_notice(payload, callback_token) {
+  const business_number = String(payload?.BusinessShortCode || "").trim();
+
+  if (!business_number || !/^[A-Z0-9]{6,20}$/.test(String(payload?.TransID || ""))) {
+    return { reason: "The notice is not a valid M-Pesa payment notice." };
+  }
+
+  const account = (
+    await db.query(
+      `
+        SELECT
+          payment_accounts.id,
+          payment_accounts.owner_id,
+          payment_accounts.c2b_callback_token_encrypted
+        FROM payment_accounts
+        WHERE payment_accounts.business_number = $1
+          AND payment_accounts.provider_code = 'mpesa'
+          AND payment_accounts.status = 'active'
+        LIMIT 1
+      `,
+      [business_number]
+    )
+  ).rows[0];
+
+  if (!account) {
+    return { reason: "No active payment account has this business number." };
+  }
+
+  if (!callback_token_matches(account.c2b_callback_token_encrypted, callback_token)) {
+    return {
+      account,
+      reason: account.c2b_callback_token_encrypted
+        ? "The notice came to the wrong address for this account."
+        : "This account has no secret notice address yet: re-register its addresses.",
+    };
+  }
+
+  return { account };
 }
 
 async function save_c2b_callback(event_type, payload) {
@@ -1396,4 +1481,5 @@ module.exports = {
   archive_property,
   reregister_payment_account_c2b_urls,
   save_c2b_callback,
+  check_c2b_notice,
 };

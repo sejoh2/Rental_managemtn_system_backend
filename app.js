@@ -28,6 +28,8 @@ const sms_routes = require("./src/sms/sms_routes");
 const report_routes = require("./src/reports/report_routes");
 const settings_routes = require("./src/settings/settings_routes");
 const admin_routes = require("./src/admin/admin_routes");
+const subscription_routes = require("./src/subscriptions/subscription_routes");
+const admin_billing_routes = require("./src/subscriptions/admin_billing_routes");
 const agent_data_routes = require("./src/agent_data/agent_data_routes");
 const reminder_routes = require("./src/reminders/reminder_routes");
 const file_routes = require("./src/files/file_routes");
@@ -87,6 +89,9 @@ app.use("/api/properties", property_routes);
   Must stay above the routers mounted on "/api": those apply
   their owner-only check to every path that reaches them.
 */
+// Kodi's own billing: before "/api/admin" and the "/api" routers.
+app.use("/api/admin/billing", admin_billing_routes);
+app.use("/api/subscriptions", subscription_routes);
 app.use("/api/admin", admin_routes);
 
 // The customer agent's read-only figures (own token, no user session).

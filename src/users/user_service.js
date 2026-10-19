@@ -8,6 +8,10 @@ const {
   normalize_phone,
 } = require("../utils/phone");
 
+const {
+  ensure_subscription,
+} = require("../subscriptions/subscription_service");
+
 function service_error(message, status_code = 400) {
   const error = new Error(message);
   error.status_code = status_code;
@@ -118,6 +122,9 @@ async function create_owner({
   );
 
   const user = result.rows[0];
+
+  // The free trial starts now (until the end of the next full month).
+  await ensure_subscription(user.user_id);
 
   await log_audit({
     user_id: admin_user.user_id,
@@ -409,6 +416,9 @@ async function promote_to_owner({
     await client.query("COMMIT");
 
     const promoted_user = updated_result.rows[0];
+
+    // The free trial starts now (until the end of the next full month).
+    await ensure_subscription(promoted_user.user_id);
 
     await log_audit({
       user_id: admin_user.user_id,

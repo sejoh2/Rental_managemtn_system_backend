@@ -1,6 +1,10 @@
 const db = require("../config/db");
 
 const {
+  list_accounts: list_billing_accounts,
+} = require("../subscriptions/subscription_service");
+
+const {
   normalize_phone,
   mask_phone,
 } = require("../utils/phone");
@@ -360,6 +364,57 @@ async function get_notifications() {
     waiting.rows[0].pending_sender_ids
   );
 
+  /*
+    New accounts waiting for the admin to make them owners (each one
+    is a notification): who, when they registered, and the pricing
+    card they picked on the home page, if they did.
+  */
+  const waiting_people = (
+    await db.query(`
+      SELECT user_id, first_name, last_name, phone, created_at, requested_plan_months
+      FROM users
+      WHERE role = 'user'
+        AND status = 'active'
+      ORDER BY created_at DESC
+      LIMIT 10
+    `)
+  ).rows.map((person) => ({
+    user_id: person.user_id,
+    name:
+      person.first_name === "New" && person.last_name === "User"
+        ? null
+        : `${person.first_name} ${person.last_name}`.trim(),
+    phone: person.phone,
+    registered_at: person.created_at,
+    requested_plan_months: person.requested_plan_months,
+  }));
+
+  /*
+    Kodi billing: landlords unpaid for 60 days or more, and M-Pesa
+    payments that need the admin (a result that did not match, or
+    money that could not be matched to a bill) in the last 30 days.
+  */
+  const billing_accounts = await list_billing_accounts();
+
+  const long_unpaid = billing_accounts
+    .filter((account) => account.days_overdue >= 60)
+    .map((account) => ({
+      owner_id: account.owner_id,
+      name: `${account.first_name} ${account.last_name}`.trim(),
+      days_overdue: account.days_overdue,
+    }));
+
+  const payment_problems = Number(
+    (
+      await db.query(`
+        SELECT COUNT(*) AS count
+        FROM audit_logs
+        WHERE action IN ('SUBSCRIPTION_PAYMENT_RESULT_MISMATCH', 'SUBSCRIPTION_PAYMENT_UNAPPLIED', 'MPESA_CALLBACK_REFUSED')
+          AND created_at > CURRENT_TIMESTAMP - INTERVAL '30 days'
+      `)
+    ).rows[0].count
+  );
+
   const waiting_for_access = Number(
     waiting.rows[0].waiting_for_access
   );
@@ -367,11 +422,16 @@ async function get_notifications() {
   return {
     pending_sender_ids,
     waiting_for_access,
+    waiting_people,
     security,
+    long_unpaid,
+    payment_problems,
     total:
       pending_sender_ids +
       waiting_for_access +
-      security.length,
+      security.length +
+      long_unpaid.length +
+      payment_problems,
   };
 }
 

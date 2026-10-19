@@ -48,6 +48,14 @@ const {
 } = require("./src/live/live_tables");
 
 const {
+  init_subscription_tables,
+} = require("./src/subscriptions/subscription_tables");
+
+const {
+  start_subscription_scheduler,
+} = require("./src/subscriptions/subscription_jobs");
+
+const {
   start_live_listener,
 } = require("./src/live/live_service");
 const {
@@ -128,6 +136,8 @@ async function start_server() {
     await init_reminder_tables();
     await init_file_tables();
     await init_live_tables();
+    await init_subscription_tables();
+    await require("./src/subscriptions/subscription_service").sync_price_from_env();
 
     console.log("[PAYMENTS] Tables are ready.");
 
@@ -152,6 +162,8 @@ async function start_server() {
     start_water_reminder_scheduler();
 
     start_payment_reminder_scheduler();
+
+    start_subscription_scheduler();
 
     await start_live_listener();
 
