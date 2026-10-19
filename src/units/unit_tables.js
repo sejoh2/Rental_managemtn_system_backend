@@ -75,8 +75,6 @@ async function init_unit_tables() {
           status IN (
             'vacant',
             'occupied',
-            'reserved',
-            'maintenance',
             'inactive'
           )
         ),

@@ -31,6 +31,23 @@ router.get(
   maintenance_controller.get_status_counts
 );
 
+/*
+  What is new: the caretaker's list for the phone app's bell,
+  and "Mark all as read" (the caretaker's list, or the owner's
+  repairs marked done by the caretaker).
+*/
+router.get(
+  "/maintenance/notices",
+  guard,
+  maintenance_controller.list_notices
+);
+
+router.post(
+  "/maintenance/notices/seen",
+  guard,
+  maintenance_controller.mark_notices_seen
+);
+
 router.get(
   "/maintenance",
   guard,

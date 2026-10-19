@@ -189,12 +189,7 @@ async function get_occupancy_summary(
         COUNT(units.id)
           FILTER (
             WHERE units.status = 'vacant'
-          ) AS vacant_units,
-
-        COUNT(units.id)
-          FILTER (
-            WHERE units.status = 'maintenance'
-          ) AS maintenance_units
+          ) AS vacant_units
 
       FROM units
 
@@ -223,9 +218,6 @@ async function get_occupancy_summary(
     total_units,
     occupied_units,
     vacant_units: Number(row.vacant_units),
-    maintenance_units: Number(
-      row.maintenance_units
-    ),
 
     occupancy_rate:
       total_units > 0

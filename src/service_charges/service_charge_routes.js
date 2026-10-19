@@ -12,6 +12,11 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const {
+  as_owner,
+  property_in_path,
+} = require("../caretakers/caretaker_acting");
+
 const router = express.Router();
 
 /*
@@ -24,9 +29,15 @@ const guard = [
   require_role("owner"),
 ];
 
+/*
+  The caretaker of the property may see its charges, for the
+  move-in costs shown when they add a tenant.
+*/
 router.get(
   "/properties/:property_id/service-charges",
-  guard,
+  authenticate,
+  require_role("owner", "caretaker"),
+  as_owner({ property: property_in_path }),
   service_charge_controller.list_service_charges
 );
 

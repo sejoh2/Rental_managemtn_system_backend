@@ -189,6 +189,56 @@ async function init_maintenance_tables() {
       ADD COLUMN IF NOT EXISTS charge_sms_sent_at TIMESTAMPTZ;
   `);
 
+  /*
+    What is new for someone, until they open it:
+    caretaker_notice  'reported' (the owner reported it) or
+                      'assigned' (the owner gave it to the
+                      caretaker), for the property's caretaker
+                      in the phone app.
+    owner_notice      'done' (the caretaker marked it done), for
+                      the owner's bell.
+    Safe to run again.
+  */
+  await db.query(`
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS caretaker_notice VARCHAR(20);
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS caretaker_notice_at TIMESTAMPTZ;
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS owner_notice VARCHAR(20);
+
+    ALTER TABLE maintenance_requests
+      ADD COLUMN IF NOT EXISTS owner_notice_at TIMESTAMPTZ;
+
+    ALTER TABLE maintenance_requests
+      DROP CONSTRAINT IF EXISTS
+        maintenance_requests_caretaker_notice_check;
+
+    ALTER TABLE maintenance_requests
+      ADD CONSTRAINT maintenance_requests_caretaker_notice_check
+      CHECK (caretaker_notice IN ('reported', 'assigned'));
+
+    ALTER TABLE maintenance_requests
+      DROP CONSTRAINT IF EXISTS
+        maintenance_requests_owner_notice_check;
+
+    ALTER TABLE maintenance_requests
+      ADD CONSTRAINT maintenance_requests_owner_notice_check
+      CHECK (owner_notice IN ('done'));
+
+    CREATE INDEX IF NOT EXISTS
+      idx_maintenance_caretaker_notice
+      ON maintenance_requests(property_id)
+      WHERE caretaker_notice IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS
+      idx_maintenance_owner_notice
+      ON maintenance_requests(owner_id)
+      WHERE owner_notice IS NOT NULL;
+  `);
+
   console.log("[MAINTENANCE] Tables initialized.");
 }
 

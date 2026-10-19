@@ -19,6 +19,7 @@ async function list_my_properties(caretaker) {
         properties.water_billing_method,
         properties.water_rate_per_unit,
         properties.water_fixed_fee,
+        properties.move_in_billing,
         property_caretaker_assignments.permission_level,
         property_caretaker_assignments.can_record_payments,
 
@@ -63,6 +64,8 @@ async function list_my_properties(caretaker) {
       row.water_fixed_fee === null
         ? null
         : Number(row.water_fixed_fee),
+    // How the first month's rent is billed when a tenant moves in mid-month.
+    move_in_billing: row.move_in_billing,
     total_units: Number(row.total_units),
     occupied_units: Number(row.occupied_units),
 

@@ -146,7 +146,46 @@ async function get_status_counts(req, res, next) {
   }
 }
 
+/*
+  The caretaker's new repairs (reported by the owner, or given
+  to them), for the bell in the phone app.
+*/
+async function list_notices(req, res, next) {
+  try {
+    if (req.user.role !== "caretaker") {
+      const error = new Error("Only caretakers have this list.");
+
+      error.status_code = 403;
+      throw error;
+    }
+
+    const notices =
+      await maintenance_service.list_caretaker_notices(req.user);
+
+    return res.status(200).json({
+      success: true,
+      total: notices.length,
+      data: notices,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function mark_notices_seen(req, res, next) {
+  try {
+    return res.status(200).json({
+      success: true,
+      data: await maintenance_service.mark_notices_seen(req.user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  list_notices,
+  mark_notices_seen,
   create_request,
   list_requests,
   get_request,

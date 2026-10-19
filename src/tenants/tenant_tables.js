@@ -1,5 +1,9 @@
 const db = require("../config/db");
 
+const {
+  log_audit,
+} = require("../audit/audit_service");
+
 async function init_tenant_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS tenants (
@@ -152,6 +156,48 @@ async function init_tenant_tables() {
   await db.query(`
     ALTER TABLE tenants
       ADD COLUMN IF NOT EXISTS move_out_snapshot JSONB;
+  `);
+
+  /*
+    A unit is vacant, occupied or taken out of use (inactive).
+    "Reserved" and "Under maintenance" are gone: a unit still
+    carrying one becomes occupied when a tenant lives in it, and
+    vacant otherwise. Done here because it needs the tenants
+    table. Safe to run again.
+  */
+  const cleared = await db.query(`
+    UPDATE units
+    SET status = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM tenants
+        WHERE tenants.unit_id = units.id
+          AND tenants.status IN ('active', 'notice_given')
+      )
+      THEN 'occupied'
+      ELSE 'vacant'
+    END
+    WHERE status IN ('reserved', 'maintenance')
+    RETURNING id, status
+  `);
+
+  if (cleared.rowCount > 0) {
+    await log_audit({
+      action: "UNIT_OLD_STATUSES_CLEARED",
+      entity_type: "unit",
+      metadata: {
+        units: cleared.rows.map((row) => ({ unit_id: Number(row.id), status: row.status })),
+      },
+    });
+  }
+
+  await db.query(`
+    ALTER TABLE units
+      DROP CONSTRAINT IF EXISTS units_status_check;
+
+    ALTER TABLE units
+      ADD CONSTRAINT units_status_check
+      CHECK (status IN ('vacant', 'occupied', 'inactive'));
   `);
 
   console.log("[TENANTS] Tenants table initialized.");

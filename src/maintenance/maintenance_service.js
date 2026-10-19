@@ -92,6 +92,15 @@ function public_request(request) {
     charge_sms_sent_at: request.charge_sms_sent_at || null,
 
     /*
+      Not yet opened: 'reported' or 'assigned' for the caretaker,
+      'done' (marked done by the caretaker) for the owner.
+    */
+    caretaker_notice: request.caretaker_notice || null,
+    caretaker_notice_at: request.caretaker_notice_at || null,
+    owner_notice: request.owner_notice || null,
+    owner_notice_at: request.owner_notice_at || null,
+
+    /*
       The tenant living in the unit now, if any.
     */
     unit_tenant_name: request.unit_tenant_name || null,
@@ -302,12 +311,16 @@ async function create_request(
           reported_by,
           reporter_role,
           charge_to_tenant,
-          charge_timing
+          charge_timing,
+          caretaker_notice,
+          caretaker_notice_at
         )
         VALUES (
           $1,$2,$3,$4,$5,
           $6,$7,$8,$9,
-          $10,$11
+          $10,$11,
+          $12::VARCHAR,
+          CASE WHEN $12::VARCHAR IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END
         )
         RETURNING *
       `,
@@ -323,6 +336,8 @@ async function create_request(
         user.role,
         Boolean(data.charge_to_tenant),
         data.charge_timing || "now",
+        // Reported by the owner: new for the property's caretaker.
+        user.role === "caretaker" ? null : "reported",
       ]
     );
 
@@ -466,6 +481,8 @@ async function get_request_by_id(
       user,
       request_id
     );
+
+    await clear_notice(client, user, [request.id]);
 
     return public_request(request);
   } finally {
@@ -936,6 +953,193 @@ async function send_repair_charge_sms(
   return get_request_by_id(user, request.id);
 }
 
+/*
+  Who should hear about this change:
+  - the owner gives the repair to the caretaker: new for the
+    caretaker ("assigned"); taking it back clears that;
+  - the caretaker marks it done: new for the owner ("done");
+  - once it is closed, nothing is new for the caretaker.
+*/
+async function set_notices_after_update(
+  client,
+  user,
+  existing,
+  updated,
+  data
+) {
+  const by_caretaker = user.role === "caretaker";
+  const assignee_changed =
+    Object.prototype.hasOwnProperty.call(data, "assigned_caretaker_id") &&
+    String(data.assigned_caretaker_id ?? "") !==
+      String(existing.assigned_caretaker_id ?? "");
+  const closed = ["resolved", "cancelled"].includes(updated.status);
+
+  let caretaker_notice = existing.caretaker_notice || null;
+  let caretaker_changed = false;
+
+  if (!by_caretaker && assignee_changed) {
+    caretaker_changed = true;
+    caretaker_notice = updated.assigned_caretaker_id
+      ? "assigned"
+      : caretaker_notice === "assigned"
+        ? null
+        : caretaker_notice;
+  }
+
+  if (closed && caretaker_notice) {
+    caretaker_changed = true;
+    caretaker_notice = null;
+  }
+
+  const done_by_caretaker =
+    by_caretaker &&
+    updated.status === "resolved" &&
+    existing.status !== "resolved";
+
+  if (!caretaker_changed && !done_by_caretaker) {
+    return;
+  }
+
+  const result = await client.query(
+    `
+      UPDATE maintenance_requests
+      SET
+        caretaker_notice = CASE WHEN $2 THEN $3::VARCHAR ELSE caretaker_notice END,
+        caretaker_notice_at = CASE
+          WHEN $2 AND $3::VARCHAR IS NULL THEN NULL
+          WHEN $2 THEN CURRENT_TIMESTAMP
+          ELSE caretaker_notice_at
+        END,
+        owner_notice = CASE WHEN $4 THEN 'done' ELSE owner_notice END,
+        owner_notice_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE owner_notice_at END
+      WHERE id = $1
+      RETURNING *
+    `,
+    [updated.id, caretaker_changed, caretaker_notice, done_by_caretaker]
+  );
+
+  Object.assign(updated, result.rows[0]);
+}
+
+/*
+  Opening a repair (or "Mark all as read") clears what was new
+  in it for the person opening it. Not recorded in the audit log:
+  it changes nothing about the repair.
+*/
+async function clear_notice(client, user, request_ids) {
+  if (!request_ids.length) {
+    return;
+  }
+
+  if (user.role === "caretaker") {
+    await client.query(
+      `
+        UPDATE maintenance_requests
+        SET caretaker_notice = NULL,
+          caretaker_notice_at = NULL
+        WHERE id = ANY($1::BIGINT[])
+          AND caretaker_notice IS NOT NULL
+      `,
+      [request_ids]
+    );
+
+    return;
+  }
+
+  // The admin looking inside the account leaves the owner's bell as it is.
+  if (user.role === "owner" && !user.acting_admin_id) {
+    await client.query(
+      `
+        UPDATE maintenance_requests
+        SET owner_notice = NULL,
+          owner_notice_at = NULL
+        WHERE id = ANY($1::BIGINT[])
+          AND owner_id = $2
+          AND owner_notice IS NOT NULL
+      `,
+      [request_ids, user.user_id]
+    );
+  }
+}
+
+/*
+  What is new for the caretaker: open repairs in their
+  properties that the owner reported, or gave to them.
+*/
+async function list_caretaker_notices(user) {
+  const result = await db.query(
+    `
+      SELECT
+        maintenance_requests.*,
+        properties.name AS property_name,
+        units.unit_number
+      FROM maintenance_requests
+      INNER JOIN properties
+        ON properties.id = maintenance_requests.property_id
+      INNER JOIN property_caretaker_assignments
+        ON property_caretaker_assignments.property_id =
+          maintenance_requests.property_id
+        AND property_caretaker_assignments.caretaker_id = $1
+        AND property_caretaker_assignments.owner_id = $2
+        AND property_caretaker_assignments.status = 'active'
+      LEFT JOIN units
+        ON units.id = maintenance_requests.unit_id
+      WHERE maintenance_requests.owner_id = $2
+        AND maintenance_requests.status IN ('reported', 'in_progress')
+        AND (
+          maintenance_requests.caretaker_notice = 'reported'
+          OR (
+            maintenance_requests.caretaker_notice = 'assigned'
+            AND maintenance_requests.assigned_caretaker_id = $1
+          )
+        )
+      ORDER BY maintenance_requests.caretaker_notice_at DESC NULLS LAST
+      LIMIT 50
+    `,
+    [user.user_id, user.owner_id]
+  );
+
+  return result.rows.map(public_request);
+}
+
+/*
+  "Mark all as read": the caretaker's notices in their
+  properties, or the owner's "done" notices.
+*/
+async function mark_notices_seen(user) {
+  const result =
+    user.role === "caretaker"
+      ? await db.query(
+        `
+          SELECT maintenance_requests.id
+          FROM maintenance_requests
+          INNER JOIN property_caretaker_assignments
+            ON property_caretaker_assignments.property_id =
+              maintenance_requests.property_id
+            AND property_caretaker_assignments.caretaker_id = $1
+            AND property_caretaker_assignments.status = 'active'
+          WHERE maintenance_requests.owner_id = $2
+            AND maintenance_requests.caretaker_notice IS NOT NULL
+        `,
+        [user.user_id, user.owner_id]
+      )
+      : await db.query(
+        `
+          SELECT id
+          FROM maintenance_requests
+          WHERE owner_id = $1
+            AND owner_notice IS NOT NULL
+        `,
+        [user.user_id]
+      );
+
+  const ids = result.rows.map((row) => row.id);
+
+  await clear_notice(db, user, ids);
+
+  return { cleared: ids.length };
+}
+
 async function update_request(
   user,
   request_id,
@@ -1164,6 +1368,14 @@ async function update_request(
 
     const updated = result.rows[0];
 
+    await set_notices_after_update(
+      client,
+      user,
+      existing,
+      updated,
+      data
+    );
+
     const repair = await record_repair_cost(
       client,
       user,
@@ -1263,4 +1475,6 @@ module.exports = {
   update_request,
   send_repair_charge_sms,
   get_status_counts,
+  list_caretaker_notices,
+  mark_notices_seen,
 };
