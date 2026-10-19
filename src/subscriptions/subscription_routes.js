@@ -5,6 +5,10 @@ const { rateLimit } = require("express-rate-limit");
 const db = require("../config/db");
 
 const {
+  log_audit,
+} = require("../audit/audit_service");
+
+const {
   authenticate,
 } = require("../auth/auth_middleware");
 
@@ -58,8 +62,21 @@ function respond(handler, status = 200) {
 */
 const result_limiter = rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: "draft-8", legacyHeaders: false });
 
-router.post("/stk-result/:secret", result_limiter, (req, res) => {
-  if (!callback_ip_allowed(req.ip) || !mpesa.result_secret_matches(req.params.secret)) {
+router.post("/stk-result/:secret", result_limiter, async (req, res) => {
+  const ip_ok = callback_ip_allowed(req.ip);
+
+  if (!ip_ok || !mpesa.result_secret_matches(req.params.secret)) {
+    // Recorded (never the secret): a wrong KODI_MPESA_RESULT_SECRET or address list shows in the admin bell.
+    await log_audit({
+      action: "SUBSCRIPTION_RESULT_REFUSED",
+      entity_type: "subscription_stk",
+      metadata: {
+        reason: ip_ok ? "wrong secret in the address" : "address not in MPESA_CALLBACK_ALLOWED_IPS",
+        checkout_request_id: String(req.body?.Body?.stkCallback?.CheckoutRequestID || "").slice(0, 100) || null,
+      },
+      ip_address: req.ip,
+    }).catch(() => {});
+
     return res.status(404).json({ success: false, error: "Route not found." });
   }
 

@@ -97,8 +97,8 @@ function explain(error) {
 
   return new MpesaError(`M-Pesa refused: ${String(message).slice(0, 200)}`, {
     code,
-    // The request is still being processed: ask again later.
-    pending: /500\.001\.1001|being processed/i.test(`${code} ${message}`),
+    // Not an answer yet: still being processed, or asked too often (429). Ask again later.
+    pending: error.response?.status === 429 || /500\.001\.1001|being processed|under processing|4999/i.test(`${code} ${message}`),
   });
 }
 
