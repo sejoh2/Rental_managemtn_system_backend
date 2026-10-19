@@ -16,7 +16,9 @@ const {
   KODI_MPESA_SHORTCODE       the till's store (head office) number
   KODI_MPESA_TILL_NUMBER     the till that receives the money
 
-  Till only (Buy Goods), decided 2026-10-18: no paybill.
+  Till only (Buy Goods), decided 2026-10-18: no paybill. The one
+  exception is Safaricom's sandbox, whose test number (174379) only
+  accepts paybill-type prompts; production always uses Buy Goods.
   KODI_MPESA_PASSKEY         from Safaricom when the till goes live on Daraja
   KODI_MPESA_RESULT_SECRET   long random text in the result address
 
@@ -114,7 +116,7 @@ async function stk_push({ phone, amount, account_reference, description }) {
         BusinessShortCode: process.env.KODI_MPESA_SHORTCODE,
         Password: password(time),
         Timestamp: time,
-        TransactionType: "CustomerBuyGoodsOnline",
+        TransactionType: env() === "production" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
         Amount: amount,
         PartyA: phone,
         PartyB: process.env.KODI_MPESA_TILL_NUMBER,

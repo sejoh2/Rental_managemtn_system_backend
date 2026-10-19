@@ -145,6 +145,7 @@ async function kodi_income(days) {
       SELECT
         s.trial_ends_on::TEXT AS trial_ends_on,
         s.paid_through::TEXT AS paid_through,
+        s.grace_cut_on::TEXT AS grace_cut_on,
         i.amount_due AS owing
       FROM users u
       LEFT JOIN subscriptions s ON s.owner_id = u.user_id
@@ -277,7 +278,7 @@ async function with_billing(rows) {
       await db.query(
         `
           SELECT
-            s.owner_id, s.trial_ends_on::TEXT AS trial_ends_on, s.paid_through::TEXT AS paid_through,
+            s.owner_id, s.trial_ends_on::TEXT AS trial_ends_on, s.paid_through::TEXT AS paid_through, s.grace_cut_on::TEXT AS grace_cut_on,
             i.amount_due AS owing,
             (SELECT MAX(p.paid_on)::TEXT FROM subscription_payments p WHERE p.owner_id = s.owner_id) AS last_paid_on
           FROM subscriptions s

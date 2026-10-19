@@ -7,9 +7,10 @@ const dates = require("./subscription_dates");
 
 /*
   Every minute: payment requests without a result are checked with
-  Safaricom. Every 15 minutes: bills on the 1st, the automatic
-  M-Pesa prompt, and reminders by SMS, only between 09:00 and
-  19:00 Nairobi time:
+  Safaricom. Every 15 minutes: bills on the 1st and reminders by
+  SMS, only between 09:00 and 19:00 Nairobi time. No M-Pesa prompt
+  is ever sent by itself (decided 2026-10-19): only when the landlord
+  pays in Settings, Billing, or the admin sends one on request.
   - trial ending: 7, 3 and 1 days before;
   - a new bill, with the prompt;
   - during the grace days: every 2 days;
@@ -68,16 +69,8 @@ async function bill_owner(owner_id, now) {
     await send_notice(
       owner_id,
       `bill:${invoice.invoice_id}`,
-      `Kodi: your bill for ${period} is ${money(invoice.amount_due)}. Approve the M-Pesa prompt on your phone, or pay in Kodi, Settings, Billing, by ${dates.label(status.grace_ends_on)}.`
+      `Kodi: your bill for ${period} is ${money(invoice.amount_due)}. Pay by ${dates.label(status.grace_ends_on)} in Kodi: Settings, Billing, Pay (an M-Pesa prompt then comes to your phone).`
     );
-
-    if (!invoice.auto_stk_at && mpesa.configured()) {
-      await db.query("UPDATE subscription_invoices SET auto_stk_at = CURRENT_TIMESTAMP WHERE invoice_id = $1", [invoice.invoice_id]);
-
-      await payments.request_payment({ owner_id, automatic: true }).catch((error) => {
-        console.error(`[SUBSCRIPTIONS] Automatic payment request for owner ${owner_id} failed:`, error.message);
-      });
-    }
 
     if (status.days_overdue > 1 && status.days_overdue % 2 === 1) {
       await send_notice(

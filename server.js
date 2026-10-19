@@ -137,6 +137,7 @@ async function start_server() {
     await init_file_tables();
     await init_live_tables();
     await init_subscription_tables();
+    await require("./src/subscriptions/subscription_service").sync_price_from_env();
 
     console.log("[PAYMENTS] Tables are ready.");
 

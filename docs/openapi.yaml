@@ -330,6 +330,7 @@ paths:
         Admin changes (all need `reason`, all audited with before and
         after): PUT /settings, PUT /plans/{months},
         GET /owners/{owner_id}, POST /owners/{owner_id}/extend-trial,
+        /end-trial (`first_bill`: full, prorated or next_month),
         /free-months, /discounts, /request-payment,
         POST /discounts/{discount_id}/end,
         PUT /invoices/{invoice_id}/amount (lower only; the rest

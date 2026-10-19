@@ -54,10 +54,12 @@ async function void_prepaid(client, invoice_id) {
 }
 
 /*
-  Sends the prompt for the current bill, or for a prepaid plan.
-  phone_input defaults to the owner's sign-in phone.
+  Sends the prompt for the current bill, or for a prepaid plan, or
+  the next month ahead. Only ever on a click: the landlord's Pay, or
+  the admin's "Send M-Pesa prompt". phone_input defaults to the
+  owner's sign-in phone.
 */
-async function request_payment({ owner_id, phone_input, plan_months = null, requested_by = null, automatic = false, ip_address = null }) {
+async function request_payment({ owner_id, phone_input, plan_months = null, requested_by = null, ip_address = null, show_details = false }) {
   if (!mpesa.configured()) {
     throw service_error("M-Pesa payments to Kodi are not set up yet. Please contact Kodi to pay.", 503);
   }
@@ -70,24 +72,22 @@ async function request_payment({ owner_id, phone_input, plan_months = null, requ
 
   if (!phone) throw service_error("Enter a valid Kenyan M-Pesa phone number.", 422);
 
-  if (!automatic) {
-    const recent = (
-      await db.query(
-        `SELECT COUNT(*)::INT AS count,
-                MAX(created_at) FILTER (WHERE status IN ('sending', 'sent', 'confirming')) AS waiting_since
-         FROM subscription_stk_requests
-         WHERE owner_id = $1 AND NOT automatic AND created_at > CURRENT_TIMESTAMP - INTERVAL '10 minutes'`,
-        [owner_id]
-      )
-    ).rows[0];
+  const recent = (
+    await db.query(
+      `SELECT COUNT(*)::INT AS count,
+              MAX(created_at) FILTER (WHERE status IN ('sending', 'sent', 'confirming')) AS waiting_since
+       FROM subscription_stk_requests
+       WHERE owner_id = $1 AND created_at > CURRENT_TIMESTAMP - INTERVAL '10 minutes'`,
+      [owner_id]
+    )
+  ).rows[0];
 
-    if (recent.waiting_since && Date.now() - new Date(recent.waiting_since).getTime() < WAIT_BETWEEN_REQUESTS_SECONDS * 1000) {
-      throw service_error("A payment request was just sent. Check your phone and enter your M-Pesa PIN.", 409);
-    }
+  if (recent.waiting_since && Date.now() - new Date(recent.waiting_since).getTime() < WAIT_BETWEEN_REQUESTS_SECONDS * 1000) {
+    throw service_error("A payment request was just sent. Check your phone and enter your M-Pesa PIN.", 409);
+  }
 
-    if (recent.count >= REQUESTS_PER_10_MINUTES) {
-      throw service_error("Too many payment requests. Please wait 10 minutes and try again.", 429);
-    }
+  if (recent.count >= REQUESTS_PER_10_MINUTES) {
+    throw service_error("Too many payment requests. Please wait 10 minutes and try again.", 429);
   }
 
   let invoice;
@@ -97,16 +97,19 @@ async function request_payment({ owner_id, phone_input, plan_months = null, requ
   } else {
     invoice = (await subscriptions.ensure_monthly_invoice(owner_id)).invoice;
 
-    if (!invoice || invoice.status !== "open") throw service_error("There is nothing to pay right now.", 409);
+    // Nothing due: the next month, paid ahead.
+    if (!invoice || invoice.status !== "open") {
+      invoice = await subscriptions.create_next_month_invoice(owner_id);
+    }
   }
 
   if (invoice.amount_due < 1) throw service_error("There is nothing to pay right now.", 409);
 
   const request = (
     await db.query(
-      `INSERT INTO subscription_stk_requests (owner_id, invoice_id, phone, amount, requested_by, automatic)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [owner_id, invoice.invoice_id, phone, invoice.amount_due, requested_by, automatic]
+      `INSERT INTO subscription_stk_requests (owner_id, invoice_id, phone, amount, requested_by)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [owner_id, invoice.invoice_id, phone, invoice.amount_due, requested_by]
     )
   ).rows[0];
 
@@ -129,7 +132,15 @@ async function request_payment({ owner_id, phone_input, plan_months = null, requ
     );
     await void_prepaid(db, invoice.invoice_id);
 
-    throw service_error(`The payment request could not be sent: ${error.message}`, 502);
+    console.error(`[SUBSCRIPTIONS] Payment request for owner ${owner_id} failed:`, error.message);
+
+    // The landlord gets a plain sentence; the reason is kept for the admin (Billing, M-Pesa prompts).
+    throw service_error(
+      show_details
+        ? `The payment request could not be sent: ${error.message}`
+        : "M-Pesa could not send the payment prompt just now. Please try again in a few minutes; if it keeps failing, contact Kodi.",
+      502
+    );
   }
 
   await log_audit({
@@ -138,7 +149,7 @@ async function request_payment({ owner_id, phone_input, plan_months = null, requ
     action: "SUBSCRIPTION_PAYMENT_REQUESTED",
     entity_type: "subscription_invoice",
     entity_id: invoice.invoice_id,
-    metadata: { stk_id: request.stk_id, amount: invoice.amount_due, phone: mask_phone(phone), plan_months, automatic },
+    metadata: { stk_id: request.stk_id, amount: invoice.amount_due, phone: mask_phone(phone), plan_months },
     ip_address,
   });
 
@@ -327,7 +338,38 @@ async function handle_result(payload, ip_address) {
 
   await db.query("UPDATE subscription_stk_requests SET status = 'confirming', mpesa_receipt = $2 WHERE stk_id = $1 AND status = 'sent'", [stk.stk_id, receipt]);
 
-  await confirm({ ...stk, status: "confirming", mpesa_receipt: receipt });
+  const outcome = await confirm({ ...stk, status: "confirming", mpesa_receipt: receipt });
+
+  // Safaricom often says "still processing" when asked straight after its result: ask again soon.
+  if (outcome === "unknown") confirm_again_soon(stk.stk_id);
+}
+
+/*
+  Asks Safaricom again after 3, 8, 15 and 30 seconds, until it says
+  how the request ended (the minute check is still there behind it),
+  so a paid bill shows as paid within seconds.
+*/
+const QUICK_CHECKS_MS = [3000, 8000, 15000, 30000];
+
+function confirm_again_soon(stk_id, attempt = 0) {
+  if (attempt >= QUICK_CHECKS_MS.length) return;
+
+  const timer = setTimeout(async () => {
+    try {
+      const stk = (
+        await db.query("SELECT * FROM subscription_stk_requests WHERE stk_id = $1 AND status IN ('sent', 'confirming')", [stk_id])
+      ).rows[0];
+
+      if (!stk) return;
+
+      if ((await confirm(stk)) === "unknown") confirm_again_soon(stk_id, attempt + 1);
+    } catch (error) {
+      console.error("[SUBSCRIPTIONS] Checking a payment again failed:", error.message);
+      confirm_again_soon(stk_id, attempt + 1);
+    }
+  }, QUICK_CHECKS_MS[attempt]);
+
+  timer.unref?.();
 }
 
 // Requests without a result yet: asked about after a minute, then every minute.

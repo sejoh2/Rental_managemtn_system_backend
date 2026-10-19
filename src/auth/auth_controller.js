@@ -117,6 +117,7 @@ async function subscription_summary(user) {
     covered_until: status.covered_until,
     grace_ends_on: status.grace_ends_on,
     days_left: status.days_left,
+    grace_days_left: status.grace_days_left,
   };
 
   if (user.role !== "owner") {

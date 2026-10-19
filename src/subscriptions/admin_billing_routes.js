@@ -64,12 +64,19 @@ router.put(
   respond((req) =>
     subscriptions.update_plan(
       req.user,
-      parse(z.coerce.number().int().min(2).max(24), req.params.months),
+      parse(z.coerce.number().int().min(1).max(24), req.params.months),
       parse(
         z
           .object({
+            name: z.string().trim().min(1).max(40).optional(),
+            tagline: z.string().trim().max(160).nullable().optional(),
+            features: z.array(z.string().trim().min(1).max(120)).max(12).optional(),
+            most_popular: z.boolean().optional(),
             discount_percent: z.number().min(0).max(90).optional(),
             enabled: z.boolean().optional(),
+            offer_percent: z.number().gt(0).max(90).nullable().optional(),
+            offer_label: z.string().trim().max(60).nullable().optional(),
+            offer_ends_on: z.string().date().nullable().optional(),
             reason: reason.optional(),
           })
           .strict(),
@@ -87,6 +94,23 @@ const months_schema = z.object({ months: z.number().int().min(1).max(12), reason
 router.post(
   "/owners/:owner_id/extend-trial",
   respond((req) => subscriptions.extend_trial(req.user, parse(id_param, req.params.owner_id), parse(months_schema, req.body || {}), req.ip))
+);
+
+router.post(
+  "/owners/:owner_id/end-grace",
+  respond((req) => subscriptions.end_grace(req.user, parse(id_param, req.params.owner_id), parse(z.object({ reason }).strict(), req.body || {}), req.ip))
+);
+
+router.post(
+  "/owners/:owner_id/end-trial",
+  respond((req) =>
+    subscriptions.end_trial(
+      req.user,
+      parse(id_param, req.params.owner_id),
+      parse(z.object({ first_bill: z.enum(["full", "prorated", "next_month"]), reason }).strict(), req.body || {}),
+      req.ip
+    )
+  )
 );
 
 router.post(
@@ -166,7 +190,7 @@ router.post(
   respond((req) => {
     const body = parse(z.object({ phone: z.string().trim().max(20).optional() }).strict(), req.body || {});
 
-    return payments.request_payment({ owner_id: parse(id_param, req.params.owner_id), phone_input: body.phone, requested_by: req.user.user_id, ip_address: req.ip });
+    return payments.request_payment({ owner_id: parse(id_param, req.params.owner_id), phone_input: body.phone, requested_by: req.user.user_id, ip_address: req.ip, show_details: true });
   })
 );
 

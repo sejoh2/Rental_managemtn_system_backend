@@ -72,6 +72,42 @@ router.post("/stk-result/:secret", result_limiter, (req, res) => {
   return undefined;
 });
 
+// The landing page's prices (public: the cards that are on, nothing about any landlord).
+const pricing_limiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: "draft-8", legacyHeaders: false });
+
+router.get(
+  "/pricing",
+  pricing_limiter,
+  respond(async () => subscriptions.public_pricing())
+);
+
+/*
+  Someone waiting for owner access says which card they picked on the
+  home page, so the admin sees it with the new account.
+*/
+router.put(
+  "/requested-plan",
+  authenticate,
+  require_role("user"),
+  respond(async (req) => {
+    const { months } = parse(z.object({ months: z.number().int().min(1).max(24) }).strict(), req.body || {});
+    const offered = (await subscriptions.list_plans(db, { enabled_only: true })).some((plan) => plan.months === months);
+
+    if (!offered) {
+      const error = new Error("That plan is not offered.");
+
+      error.status_code = 422;
+      throw error;
+    }
+
+    await db.query("UPDATE users SET requested_plan_months = $2 WHERE user_id = $1 AND role = 'user'", [req.user.user_id, months]);
+    // The admin's bell looks again.
+    await db.query(`SELECT pg_notify('bell_changed', '{"to":"admin"}')`);
+
+    return { months };
+  })
+);
+
 const owner_guard = [authenticate, require_role("owner")];
 
 router.get("/", owner_guard, respond((req) => subscriptions.owner_summary(req.user.user_id)));
@@ -105,6 +141,8 @@ router.post(
       plan_months: body.plan_months || null,
       requested_by: req.user.acting_admin_id || req.user.user_id,
       ip_address: req.ip,
+      // The admin inside the account sees M-Pesa's own reason.
+      show_details: Boolean(req.user.acting_admin_id),
     });
   })
 );
