@@ -233,7 +233,11 @@ async function send_due_pushes() {
         tokens,
         notification: { title: row.title, body: row.body },
         data,
-        android: { priority: "high" },
+        // kodi_alerts: the phone app's high-importance channel, so it shows as a banner.
+        android: {
+          priority: "high",
+          notification: { channelId: "kodi_alerts", sound: "default", defaultVibrateTimings: true },
+        },
       });
 
       const gone = [];
