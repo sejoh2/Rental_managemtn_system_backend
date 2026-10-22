@@ -8,17 +8,22 @@ const {
 } = require("../auth/auth_service");
 
 /*
-  Live bells. A browser keeps one connection open (Server-Sent
-  Events); when the database announces that a bell changed (see
-  live_tables.js), every open connection for that bell is told
-  "look again", and the browser then fetches the counts the
-  normal, signed-in way. No data travels on the live connection.
+  Live updates. A browser or the caretaker app keeps one
+  connection open (Server-Sent Events). When the database
+  announces a change (see live_tables.js), every open connection
+  that may see it is told "look again":
+  - "bell": the owner's or admin's bell counts;
+  - "changed" {area, property_id}: data on screens, for the
+    owner's account, and for a caretaker only in their properties.
+  The screen then fetches the data the normal, signed-in way. No
+  data travels on the live connection.
 
   Every running server listens to the database, so this works
   with more than one server on the same database.
 */
 
 const CHANNEL = "bell_changed";
+const DATA_CHANNEL = "data_changed";
 
 // Keeps proxies (Cloudflare closes after about 100 seconds of silence) from closing it.
 const HEARTBEAT_MS = 25 * 1000;
@@ -35,11 +40,61 @@ let listener = null;
 let reconnect_timer = null;
 let reconnect_delay_ms = 5000;
 
-function send(client, event) {
+function send(client, event, data = {}) {
   try {
-    client.res.write(`event: ${event}\ndata: {}\n\n`);
+    client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   } catch {
     clients.delete(client);
+  }
+}
+
+/*
+  The properties a caretaker's connection may hear about: their
+  active assignments, looked up when it opens and again when the
+  owner changes them.
+*/
+async function load_caretaker_properties(client) {
+  const result = await db.query(
+    `
+      SELECT property_id
+      FROM property_caretaker_assignments
+      WHERE caretaker_id = $1
+        AND owner_id = $2
+        AND status = 'active'
+    `,
+    [client.user_id, client.owner_id]
+  );
+
+  client.property_ids = new Set(result.rows.map((row) => String(row.property_id)));
+}
+
+async function deliver_data_change(message) {
+  const owner_id = String(message.owner_id);
+  const property_id = message.property_id === null || message.property_id === undefined
+    ? null
+    : String(message.property_id);
+  const data = { area: String(message.area || ""), property_id };
+
+  for (const client of clients) {
+    if (String(client.owner_id) !== owner_id) continue;
+
+    if (client.scope === "owner") {
+      send(client, "changed", data);
+      continue;
+    }
+
+    if (client.scope !== "caretaker") continue;
+
+    // A changed assignment: the caretaker's own list of properties may change.
+    if (data.area === "caretakers") {
+      await load_caretaker_properties(client).catch(() => {});
+      send(client, "changed", data);
+      continue;
+    }
+
+    if (data.area === "account" || property_id === null || client.property_ids?.has(property_id)) {
+      send(client, "changed", data);
+    }
   }
 }
 
@@ -66,6 +121,7 @@ function deliver(message) {
 function tell_everyone_to_look_again() {
   for (const client of clients) {
     send(client, "bell");
+    send(client, "changed", { area: "all", property_id: null });
   }
 }
 
@@ -94,7 +150,13 @@ async function start_live_listener() {
 
   client.on("notification", (notification) => {
     try {
-      deliver(JSON.parse(notification.payload));
+      const message = JSON.parse(notification.payload);
+
+      if (notification.channel === DATA_CHANNEL) {
+        deliver_data_change(message).catch(() => {});
+      } else {
+        deliver(message);
+      }
     } catch {
       // An announcement that cannot be read is ignored.
     }
@@ -109,6 +171,7 @@ async function start_live_listener() {
   try {
     await client.connect();
     await client.query(`LISTEN ${CHANNEL}`);
+    await client.query(`LISTEN ${DATA_CHANNEL}`);
 
     const was_reconnect = reconnect_delay_ms > 5000;
 
@@ -174,10 +237,27 @@ setInterval(async () => {
 
   scope "admin": the admin's bell. scope "owner": the bell of the
   owner account in use (an admin inside an owner's account gets
-  that owner's bell).
+  that owner's bell). scope "caretaker": the caretaker app's
+  updates, for the properties they look after.
 */
 function create_ticket(req, scope) {
   const signed_in = req.admin || req.user;
+
+  if (scope === "caretaker") {
+    if (req.user.role !== "caretaker") {
+      const error = new Error("Only caretakers have this connection.");
+
+      error.status_code = 403;
+      throw error;
+    }
+
+    return token_service.create_live_ticket({
+      user_id: req.user.user_id,
+      session_id: req.session_id,
+      scope: "caretaker",
+      owner_id: req.user.owner_id,
+    });
+  }
 
   if (scope === "admin") {
     if (signed_in.role !== "admin") {
@@ -232,7 +312,8 @@ async function open_stream(req, res) {
   if (
     !user ||
     user.status !== "active" ||
-    (ticket.scope === "admin" && user.role !== "admin")
+    (ticket.scope === "admin" && user.role !== "admin") ||
+    (ticket.scope === "caretaker" && user.role !== "caretaker")
   ) {
     return res.status(401).json({
       success: false,
@@ -269,6 +350,10 @@ async function open_stream(req, res) {
     user_id: ticket.user_id,
     session_id: ticket.sid,
   };
+
+  if (client.scope === "caretaker") {
+    await load_caretaker_properties(client);
+  }
 
   clients.add(client);
   send(client, "ready");
