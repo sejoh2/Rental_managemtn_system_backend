@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const expense_controller = require(
   "./expense_controller"
@@ -14,6 +15,17 @@ const {
 
 const router = express.Router();
 
+/*
+  Per network address, far above normal use: totals are heavy queries.
+*/
+const totals_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
+
 
 /*
   The guard is attached to each route, not to the whole router.
@@ -23,6 +35,15 @@ const router = express.Router();
 const guard = [
   authenticate,
   require_role("owner", "caretaker"),
+];
+
+/*
+  Totals and the money in against the money out are the owner's;
+  a caretaker sees the expenses one by one.
+*/
+const owner_guard = [
+  authenticate,
+  require_role("owner"),
 ];
 
 router.post(
@@ -42,19 +63,22 @@ router.get(
 */
 router.get(
   "/expenses/export",
-  guard,
+  totals_limiter,
+  owner_guard,
   expense_controller.export_expenses
 );
 
 router.get(
   "/expenses/summary",
-  guard,
+  totals_limiter,
+  owner_guard,
   expense_controller.get_expense_summary
 );
 
 router.get(
   "/expenses/reconciliation",
-  guard,
+  totals_limiter,
+  owner_guard,
   expense_controller.get_expense_reconciliation
 );
 

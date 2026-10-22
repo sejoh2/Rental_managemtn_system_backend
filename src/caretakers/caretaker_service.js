@@ -8,10 +8,44 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
-function permission_label(level) {
-  return level === "level_2"
-    ? "Level 2 · Add tenants"
-    : "Level 1 · View, readings & reports";
+const {
+  CARETAKER_PERMISSIONS,
+  caretaker_permissions,
+  merge_permissions,
+} = require("./caretaker_access_service");
+
+/*
+  The switches asked for: the new form, or the older level
+  (level_2 turns "manage tenants" on, level_1 off).
+*/
+function permission_changes(data) {
+  const changes = { ...(data.permissions || {}) };
+
+  if (data.permission_level && changes.can_manage_tenants === undefined) {
+    changes.can_manage_tenants = data.permission_level === "level_2";
+  }
+
+  return changes;
+}
+
+const permission_columns = Object.keys(CARETAKER_PERMISSIONS);
+
+/*
+  "Readings, maintenance, expenses, tenants" for the owner's list.
+*/
+function permission_label(row) {
+  const short = {
+    can_read_meters: "Readings",
+    can_enter_electricity: "Electricity",
+    can_manage_maintenance: "Maintenance",
+    can_add_expenses: "Expenses",
+    can_view_tenants: "View tenants",
+    can_manage_tenants: "Manage tenants",
+    can_record_payments: "Payments",
+  };
+  const on = permission_columns.filter((key) => row[key] === true);
+
+  return on.length ? on.map((key) => short[key]).join(" · ") : "No access";
 }
 
 function public_caretaker(row) {
@@ -34,9 +68,8 @@ function public_caretaker(row) {
     assignment_id: Number(row.assignment_id),
 
     permission_level: row.permission_level,
-    permission_label: permission_label(
-      row.permission_level
-    ),
+    permissions: caretaker_permissions(row),
+    permission_label: permission_label(row),
     can_record_payments: row.can_record_payments === true,
 
     assignment_status: row.assignment_status,
@@ -263,6 +296,9 @@ async function assign_caretaker(
       ]
     );
 
+    // A new (or re-added) caretaker starts from the defaults.
+    const permissions = merge_permissions({}, permission_changes(data));
+
     const assignment_result = await client.query(
       `
         INSERT INTO property_caretaker_assignments (
@@ -270,21 +306,34 @@ async function assign_caretaker(
           property_id,
           caretaker_id,
           permission_level,
+          can_read_meters,
+          can_enter_electricity,
+          can_manage_maintenance,
+          can_add_expenses,
+          can_view_tenants,
+          can_manage_tenants,
+          can_record_payments,
           status,
           assigned_at,
           unassigned_at
         )
         VALUES (
           $1,$2,$3,$4,
+          $5,$6,$7,$8,$9,$10,$11,
           'active',
           CURRENT_TIMESTAMP,
           NULL
         )
         ON CONFLICT (property_id, caretaker_id)
         DO UPDATE SET
-          permission_level =
-            EXCLUDED.permission_level,
-          can_record_payments = FALSE,
+          permission_level = EXCLUDED.permission_level,
+          can_read_meters = EXCLUDED.can_read_meters,
+          can_enter_electricity = EXCLUDED.can_enter_electricity,
+          can_manage_maintenance = EXCLUDED.can_manage_maintenance,
+          can_add_expenses = EXCLUDED.can_add_expenses,
+          can_view_tenants = EXCLUDED.can_view_tenants,
+          can_manage_tenants = EXCLUDED.can_manage_tenants,
+          can_record_payments = EXCLUDED.can_record_payments,
           status = 'active',
           assigned_at = CURRENT_TIMESTAMP,
           unassigned_at = NULL
@@ -294,7 +343,8 @@ async function assign_caretaker(
         owner.user_id,
         property_id,
         caretaker.user_id,
-        data.permission_level,
+        permissions.can_manage_tenants ? "level_2" : "level_1",
+        ...permission_columns.map((key) => permissions[key]),
       ]
     );
 
@@ -310,13 +360,13 @@ async function assign_caretaker(
       metadata: {
         caretaker_id: caretaker.user_id,
         property_id,
-        permission_level:
-          assignment.permission_level,
+        permissions: caretaker_permissions(assignment),
       },
       ip_address,
     });
 
     return public_caretaker({
+      ...assignment,
       caretaker_id: caretaker.user_id,
       first_name: caretaker.first_name,
       last_name: caretaker.last_name,
@@ -360,6 +410,12 @@ async function list_caretakers(owner) {
         properties.name AS property_name,
 
         property_caretaker_assignments.permission_level,
+        property_caretaker_assignments.can_read_meters,
+        property_caretaker_assignments.can_enter_electricity,
+        property_caretaker_assignments.can_manage_maintenance,
+        property_caretaker_assignments.can_add_expenses,
+        property_caretaker_assignments.can_view_tenants,
+        property_caretaker_assignments.can_manage_tenants,
         property_caretaker_assignments.can_record_payments,
 
         property_caretaker_assignments.status
@@ -471,9 +527,9 @@ async function get_caretaker(owner, caretaker_id) {
           property_name: assignment.property_name,
           permission_level:
             assignment.permission_level,
-          permission_label: permission_label(
-            assignment.permission_level
-          ),
+          permissions: caretaker_permissions(assignment),
+          permission_label: permission_label(assignment),
+          can_record_payments: assignment.can_record_payments === true,
           status: assignment.status,
         })
       ),
@@ -597,20 +653,30 @@ async function update_property_caretaker(
         [caretaker.user_id]
       );
     } else {
+      const permissions = merge_permissions(
+        caretaker_permissions(assignment),
+        permission_changes(data)
+      );
+
       await client.query(
         `
           UPDATE property_caretaker_assignments
           SET
-            permission_level = COALESCE(
-              $1,
-              permission_level
-            ),
+            permission_level = $1,
+            can_read_meters = $2,
+            can_enter_electricity = $3,
+            can_manage_maintenance = $4,
+            can_add_expenses = $5,
+            can_view_tenants = $6,
+            can_manage_tenants = $7,
+            can_record_payments = $8,
             status = 'active',
             unassigned_at = NULL
-          WHERE id = $2
+          WHERE id = $9
         `,
         [
-          data.permission_level || null,
+          permissions.can_manage_tenants ? "level_2" : "level_1",
+          ...permission_columns.map((key) => permissions[key]),
           assignment.id,
         ]
       );

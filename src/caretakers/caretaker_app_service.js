@@ -4,6 +4,10 @@ const {
   log_audit,
 } = require("../audit/audit_service");
 
+const {
+  caretaker_permissions,
+} = require("./caretaker_access_service");
+
 /*
   The properties a caretaker looks after, with what they may do
   in each. This is where the caretaker app starts.
@@ -21,6 +25,12 @@ async function list_my_properties(caretaker) {
         properties.water_fixed_fee,
         properties.move_in_billing,
         property_caretaker_assignments.permission_level,
+        property_caretaker_assignments.can_read_meters,
+        property_caretaker_assignments.can_enter_electricity,
+        property_caretaker_assignments.can_manage_maintenance,
+        property_caretaker_assignments.can_add_expenses,
+        property_caretaker_assignments.can_view_tenants,
+        property_caretaker_assignments.can_manage_tenants,
         property_caretaker_assignments.can_record_payments,
 
         (
@@ -73,7 +83,8 @@ async function list_my_properties(caretaker) {
       What this caretaker may do in this property.
     */
     permission_level: row.permission_level,
-    can_manage_tenants: row.permission_level === "level_2",
+    permissions: caretaker_permissions(row),
+    can_manage_tenants: row.can_manage_tenants === true,
     can_record_payments: row.can_record_payments === true,
   }));
 }
@@ -91,7 +102,9 @@ async function set_payment_permission(
   const result = await db.query(
     `
       UPDATE property_caretaker_assignments
-      SET can_record_payments = $1
+      SET can_record_payments = $1,
+        -- Taking money needs the tenants to be visible.
+        can_view_tenants = can_view_tenants OR $1
       WHERE property_id = $2
         AND owner_id = $3
         AND status = 'active'

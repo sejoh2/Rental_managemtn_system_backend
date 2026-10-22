@@ -44,6 +44,14 @@ const {
 } = require("./src/middleware/idempotency");
 
 const {
+  init_push_tables,
+} = require("./src/push/push_tables");
+
+const {
+  start_push_scheduler,
+} = require("./src/push/push_service");
+
+const {
   init_live_tables,
 } = require("./src/live/live_tables");
 
@@ -137,6 +145,7 @@ async function start_server() {
     await init_file_tables();
     await init_live_tables();
     await init_subscription_tables();
+    await init_push_tables();
     await require("./src/subscriptions/subscription_service").sync_price_from_env();
 
     console.log("[PAYMENTS] Tables are ready.");
@@ -164,6 +173,7 @@ async function start_server() {
     start_payment_reminder_scheduler();
 
     start_subscription_scheduler();
+    start_push_scheduler();
 
     await start_live_listener();
 

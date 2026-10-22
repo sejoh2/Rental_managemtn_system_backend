@@ -33,8 +33,9 @@ function account_owner_id(user) {
 }
 
 /*
-  A caretaker must be assigned to the property: Level 1 to
-  view its tenants, Level 2 to add or edit them. Owners pass.
+  A caretaker must be assigned to the property, with "view
+  tenants" to see them and "manage tenants" to add or edit them.
+  Owners pass.
 */
 async function ensure_caretaker_access(
   client,
@@ -290,7 +291,7 @@ async function create_tenant(
       client,
       owner,
       property_id,
-      "level_2"
+      "can_manage_tenants"
     );
 
     await ensure_owner_owns_property(
@@ -507,7 +508,7 @@ async function list_property_tenants(owner, property_id) {
     db,
     owner,
     property_id,
-    "level_1"
+    "can_view_tenants"
   );
 
   await ensure_owner_owns_property(
@@ -583,7 +584,7 @@ async function get_tenant_by_id(owner, tenant_id) {
     db,
     owner,
     result.rows[0].property_id,
-    "level_1"
+    "can_view_tenants"
   );
 
   return public_tenant(result.rows[0]);
@@ -606,7 +607,7 @@ async function update_tenant(
     db,
     owner,
     existing.property_id,
-    "level_2"
+    "can_manage_tenants"
   );
 
   if (

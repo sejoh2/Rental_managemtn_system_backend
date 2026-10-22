@@ -32,6 +32,29 @@ async function create_unit(req, res, next) {
   }
 }
 
+/*
+  A caretaker who may not see tenants still sees which units are
+  occupied (for meter readings), but not who lives there or what
+  they owe.
+*/
+function for_viewer(req, unit) {
+  if (!req.caretaker_assignment || req.caretaker_assignment.can_view_tenants) {
+    return unit;
+  }
+
+  return {
+    ...unit,
+    current_tenant: unit.current_tenant
+      ? {
+        tenant_id: unit.current_tenant.tenant_id,
+        full_name: null,
+        status: unit.current_tenant.status,
+        balance: null,
+      }
+      : null,
+  };
+}
+
 async function list_property_units(req, res, next) {
   try {
     const property_id = validate_property_id(
@@ -47,7 +70,7 @@ async function list_property_units(req, res, next) {
 
     return res.status(200).json({
       success: true,
-      data: units,
+      data: units.map((unit) => for_viewer(req, unit)),
     });
   } catch (error) {
     next(error);
@@ -85,7 +108,7 @@ async function get_unit(req, res, next) {
 
     return res.status(200).json({
       success: true,
-      data: unit,
+      data: for_viewer(req, unit),
     });
   } catch (error) {
     next(error);
