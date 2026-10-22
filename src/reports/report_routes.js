@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const report_controller = require(
   "./report_controller"
@@ -13,6 +14,17 @@ const {
 } = require("../middleware/role_middleware");
 
 const router = express.Router();
+
+/*
+  Per network address, far above normal use: totals are heavy queries.
+*/
+const totals_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
 
 
 /*
@@ -44,12 +56,14 @@ const owner_guard = [
 
 router.get(
   "/reports/dashboard",
+  totals_limiter,
   owner_guard,
   report_controller.get_dashboard_report
 );
 
 router.get(
   "/reports/export",
+  totals_limiter,
   owner_guard,
   report_controller.export_report
 );

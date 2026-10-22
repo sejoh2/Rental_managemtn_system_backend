@@ -65,7 +65,7 @@ function get_messaging() {
       : admin.initializeApp({ credential: admin.credential.cert(account) });
 
     messaging = app.messaging();
-    console.log(`[PUSH] Phone notifications on (Firebase project ${account.project_id}).`);
+    console.log("[PUSH] Phone notifications on.");
   } catch (error) {
     console.error("[PUSH] The Firebase key could not be read:", error.message);
     messaging = null;
