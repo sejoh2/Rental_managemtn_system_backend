@@ -114,6 +114,91 @@ async function init_live_tables() {
   console.log("[LIVE] Bell announcements ready.");
 }
 
+/*
+  Every screen updates by itself. Any change to these tables, by
+  anyone (a person, a scheduled job, an M-Pesa notice), announces
+  which account, which property and which area changed. Open
+  screens of that account (the owner's browser, the caretaker's
+  phone, for their properties only) then look again. No data
+  travels with the announcement.
+
+  Run after every table exists (the subscriptions table is made
+  last). Safe to run again: everything is replaced.
+*/
+const DATA_AREAS = [
+  ["properties", "properties"],
+  ["units", "units"],
+  ["tenants", "tenants"],
+  ["agreements", "tenants"],
+  ["deposit_settlements", "tenants"],
+  ["tenant_charges", "billing"],
+  ["payments", "payments"],
+  ["service_charges", "billing"],
+  ["water_meter_readings", "water"],
+  ["maintenance_requests", "maintenance"],
+  ["expenses", "expenses"],
+  ["property_caretaker_assignments", "caretakers"],
+  ["subscriptions", "account"],
+];
+
+async function init_data_change_triggers() {
+  await db.query(`
+    CREATE OR REPLACE FUNCTION announce_data_change()
+    RETURNS TRIGGER AS
+    $$
+    DECLARE
+      row_data JSONB;
+      row_owner_id BIGINT;
+      row_property_id BIGINT;
+    BEGIN
+      row_data := COALESCE(to_jsonb(NEW), to_jsonb(OLD));
+
+      row_property_id := CASE
+        WHEN TG_TABLE_NAME = 'properties' THEN (row_data ->> 'id')::BIGINT
+        ELSE (row_data ->> 'property_id')::BIGINT
+      END;
+
+      row_owner_id := (row_data ->> 'owner_id')::BIGINT;
+
+      IF row_owner_id IS NULL AND row_property_id IS NOT NULL THEN
+        SELECT owner_id INTO row_owner_id
+        FROM properties
+        WHERE id = row_property_id;
+      END IF;
+
+      IF row_owner_id IS NOT NULL THEN
+        PERFORM pg_notify(
+          'data_changed',
+          json_build_object(
+            'owner_id', row_owner_id,
+            'property_id', row_property_id,
+            'area', TG_ARGV[0]
+          )::TEXT
+        );
+      END IF;
+
+      RETURN NULL;
+    END;
+    $$
+    LANGUAGE plpgsql;
+  `);
+
+  for (const [table, area] of DATA_AREAS) {
+    // Names come from the list above, never from a request.
+    await db.query(`
+      DROP TRIGGER IF EXISTS live_${table} ON ${table};
+      CREATE TRIGGER live_${table}
+        AFTER INSERT OR DELETE OR UPDATE ON ${table}
+        FOR EACH ROW
+        EXECUTE FUNCTION announce_data_change('${area}');
+    `);
+  }
+
+  console.log("[LIVE] Data change announcements ready.");
+}
+
 module.exports = {
   init_live_tables,
+  init_data_change_triggers,
+  DATA_AREAS,
 };

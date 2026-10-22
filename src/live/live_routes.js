@@ -49,7 +49,8 @@ const stream_limiter = rateLimit({
 
 /*
   A one-minute pass for opening the live connection.
-  ?for=admin (the admin's bell) or ?for=owner (the owner's bell).
+  ?for=admin (the admin's bell), ?for=owner (the owner's bell and
+  screens) or ?for=caretaker (the caretaker app's screens).
 */
 router.post(
   "/live/ticket",
@@ -57,7 +58,9 @@ router.post(
   authenticate,
   (req, res, next) => {
     try {
-      const scope = req.query.for === "admin" ? "admin" : "owner";
+      const scope = ["admin", "caretaker"].includes(req.query.for)
+        ? req.query.for
+        : "owner";
 
       return res.status(200).json({
         success: true,
