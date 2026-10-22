@@ -1,5 +1,8 @@
 const express = require("express");
 const { z } = require("zod");
+const { rateLimit } = require("express-rate-limit");
+
+const push_service = require("../push/push_service");
 
 const caretaker_app_service = require("./caretaker_app_service");
 
@@ -88,6 +91,73 @@ router.put(
           body.data.allowed,
           req.ip
         ),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/*
+  The caretaker app's push address, after sign-in and whenever
+  Firebase renews it; removed when they sign out. Per network
+  address, far above normal use.
+*/
+const device_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
+
+const device_schema = z.object({
+  token: z.string().trim().min(20).max(4096),
+  platform: z.enum(["android", "ios"]).default("android"),
+}).strict();
+
+function parse_device(body) {
+  const result = device_schema.safeParse(body || {});
+
+  if (!result.success) {
+    const error = new Error("A push address (token) is required.");
+
+    error.status_code = 422;
+    throw error;
+  }
+
+  return result.data;
+}
+
+router.post(
+  "/caretaker/push-devices",
+  device_limiter,
+  caretaker_guard,
+  async (req, res, next) => {
+    try {
+      const { token, platform } = parse_device(req.body);
+
+      return res.status(200).json({
+        success: true,
+        data: await push_service.register_device(req.user, token, platform),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  "/caretaker/push-devices",
+  device_limiter,
+  caretaker_guard,
+  async (req, res, next) => {
+    try {
+      const { token } = parse_device(req.body);
+
+      return res.status(200).json({
+        success: true,
+        data: await push_service.unregister_device(req.user, token),
       });
     } catch (error) {
       next(error);

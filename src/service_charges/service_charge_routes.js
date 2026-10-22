@@ -51,7 +51,7 @@ router.get(
   read_limiter,
   authenticate,
   require_role("owner", "caretaker"),
-  as_owner({ property: property_in_path }),
+  as_owner({ property: property_in_path, level: "can_manage_tenants" }),
   service_charge_controller.list_service_charges
 );
 

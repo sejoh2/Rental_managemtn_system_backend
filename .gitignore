@@ -2,3 +2,6 @@ node_modules/
 .env
 coverage/
 npm-debug.log*
+# Firebase key for push notifications: never commit it (on Render it is the FIREBASE_SERVICE_ACCOUNT variable).
+firebase-service-account.json
+*-firebase-adminsdk-*.json

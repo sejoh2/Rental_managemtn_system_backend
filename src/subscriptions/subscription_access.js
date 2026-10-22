@@ -12,9 +12,9 @@ const {
   blocked, also inside an owner's account.
 */
 
-// Marking repairs as read changes nothing in the account, so it works while read-only too.
+// Marking repairs as read, and the phone's push address, change nothing in the account: allowed while read-only too.
 const ALWAYS_ALLOWED =
-  /^\/api\/(auth|subscriptions|admin|users)(\/|\?|$)|^\/api\/live\/ticket(\?|$)|^\/api\/maintenance\/notices\/seen(\?|$)/;
+  /^\/api\/(auth|subscriptions|admin|users)(\/|\?|$)|^\/api\/live\/ticket(\?|$)|^\/api\/maintenance\/notices\/seen(\?|$)|^\/api\/caretaker\/push-devices(\?|$)/;
 const READING = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function account_owner_id(user) {

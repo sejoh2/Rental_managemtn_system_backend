@@ -5,6 +5,20 @@ const permission_levels = [
   "level_2",
 ];
 
+/*
+  The switches, any of them; the rest keep their value (or the
+  default for a new caretaker).
+*/
+const permissions_schema = z.object({
+  can_read_meters: z.boolean().optional(),
+  can_enter_electricity: z.boolean().optional(),
+  can_manage_maintenance: z.boolean().optional(),
+  can_add_expenses: z.boolean().optional(),
+  can_view_tenants: z.boolean().optional(),
+  can_manage_tenants: z.boolean().optional(),
+  can_record_payments: z.boolean().optional(),
+}).strict();
+
 const assign_caretaker_schema = z.object({
   phone: z.string()
     .trim()
@@ -20,8 +34,13 @@ const assign_caretaker_schema = z.object({
     .min(2)
     .max(100),
 
+  /*
+    Older form: level_2 turns "manage tenants" on.
+  */
   permission_level: z.enum(permission_levels)
-    .default("level_1"),
+    .optional(),
+
+  permissions: permissions_schema.optional(),
 });
 
 const update_caretaker_schema = z.object({
@@ -39,6 +58,8 @@ const update_caretaker_schema = z.object({
 
   permission_level: z.enum(permission_levels)
     .optional(),
+
+  permissions: permissions_schema.optional(),
 
   status: z.enum([
     "active",

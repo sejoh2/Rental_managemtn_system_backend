@@ -58,6 +58,7 @@ const reading_change_guard = [
       "water_meter_readings",
       "reading_id"
     ),
+    level: "can_read_meters",
   }),
 ];
 
@@ -75,7 +76,8 @@ router.get(
 
 router.get(
   "/properties/:property_id/water-billing/stats",
-  reading_guard,
+  // Billed and collected totals: the owner's alone.
+  guard,
   water_controller.get_water_stats
 );
 

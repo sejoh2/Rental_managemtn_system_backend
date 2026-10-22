@@ -93,8 +93,15 @@ const staff = [
   require_role("owner", "caretaker"),
 ];
 
+/*
+  The switch a caretaker needs for each kind of file.
+*/
 function level_for(kind) {
-  return kind === "tenant_document" ? "level_2" : "level_1";
+  return {
+    tenant_document: "can_manage_tenants",
+    expense_receipt: "can_add_expenses",
+    meter_photo: "can_read_meters",
+  }[kind] || "level_1";
 }
 
 /*

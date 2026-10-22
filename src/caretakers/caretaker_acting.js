@@ -98,6 +98,7 @@ function as_owner({
       }
 
       req.caretaker = caretaker;
+      req.caretaker_assignment = assignment;
 
       req.user = {
         ...owner,

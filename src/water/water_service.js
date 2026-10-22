@@ -156,7 +156,8 @@ async function ensure_property_access(
     await get_caretaker_property_access(
       client,
       user,
-      property_id
+      property_id,
+      "can_read_meters"
     );
 
     owner_id = user.owner_id;
@@ -1376,6 +1377,20 @@ async function submit_meter_reading(
         previous_reading,
         current_reading,
       });
+
+      // The caretaker reads the meters, so they fix it (unless they recorded it).
+      if (owner.role !== "caretaker") {
+        require("../push/push_service")
+          .notify_property_caretaker({
+            property_id: property.id,
+            permission: "can_read_meters",
+            except_user_id: owner.user_id,
+            title: "A reading needs fixing",
+            body: `House ${unit.unit_number}: ${current_reading} is lower than the last reading (${previous_reading}).`,
+            data: { type: "reading", reading_id: String(reading.id) },
+          })
+          .catch((error) => console.error("[PUSH] Reading notification failed:", error.message));
+      }
     }
 
     return public_reading({

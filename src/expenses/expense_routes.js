@@ -25,6 +25,15 @@ const guard = [
   require_role("owner", "caretaker"),
 ];
 
+/*
+  Totals and the money in against the money out are the owner's;
+  a caretaker sees the expenses one by one.
+*/
+const owner_guard = [
+  authenticate,
+  require_role("owner"),
+];
+
 router.post(
   "/properties/:property_id/expenses",
   guard,
@@ -42,19 +51,19 @@ router.get(
 */
 router.get(
   "/expenses/export",
-  guard,
+  owner_guard,
   expense_controller.export_expenses
 );
 
 router.get(
   "/expenses/summary",
-  guard,
+  owner_guard,
   expense_controller.get_expense_summary
 );
 
 router.get(
   "/expenses/reconciliation",
-  guard,
+  owner_guard,
   expense_controller.get_expense_reconciliation
 );
 

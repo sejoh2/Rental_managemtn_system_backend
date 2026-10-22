@@ -33,15 +33,24 @@ const guard = [
   require_role("owner", "caretaker"),
 ];
 
+/*
+  Totals (income, collections, arrears) are the owner's alone; a
+  caretaker sees one tenant's statement at a time.
+*/
+const owner_guard = [
+  authenticate,
+  require_role("owner"),
+];
+
 router.get(
   "/reports/dashboard",
-  guard,
+  owner_guard,
   report_controller.get_dashboard_report
 );
 
 router.get(
   "/reports/export",
-  guard,
+  owner_guard,
   report_controller.export_report
 );
 

@@ -147,6 +147,9 @@ function public_property(
 
         permission_level:
           overview.caretaker_permission_level,
+
+        // What the owner lets the caretaker do here, one switch each.
+        permissions: overview.caretaker_permissions,
       }
       : null,
 
@@ -1113,7 +1116,8 @@ async function get_property_by_id(owner, property_id) {
         caretaker.caretaker_first_name,
         caretaker.caretaker_last_name,
         caretaker.caretaker_phone,
-        caretaker.caretaker_permission_level
+        caretaker.caretaker_permission_level,
+        caretaker.caretaker_permissions
 
       FROM (SELECT 1) AS single_row
 
@@ -1124,7 +1128,16 @@ async function get_property_by_id(owner, property_id) {
           users.last_name AS caretaker_last_name,
           users.phone AS caretaker_phone,
           property_caretaker_assignments.permission_level
-            AS caretaker_permission_level
+            AS caretaker_permission_level,
+          json_build_object(
+            'can_read_meters', property_caretaker_assignments.can_read_meters,
+            'can_enter_electricity', property_caretaker_assignments.can_enter_electricity,
+            'can_manage_maintenance', property_caretaker_assignments.can_manage_maintenance,
+            'can_add_expenses', property_caretaker_assignments.can_add_expenses,
+            'can_view_tenants', property_caretaker_assignments.can_view_tenants,
+            'can_manage_tenants', property_caretaker_assignments.can_manage_tenants,
+            'can_record_payments', property_caretaker_assignments.can_record_payments
+          ) AS caretaker_permissions
         FROM property_caretaker_assignments
         INNER JOIN users
           ON users.user_id =
