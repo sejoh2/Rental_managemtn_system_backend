@@ -5,6 +5,31 @@ const {
 } = require("../audit/audit_service");
 
 const {
+  notify_property_caretaker,
+} = require("../push/push_service");
+
+/*
+  Phone notifications to the property's caretaker (with the
+  maintenance switch), never for their own changes. Sent after
+  the change is saved; a failure never undoes the change.
+*/
+function push_to_caretaker(user, request, title) {
+  if (user.role === "caretaker") return;
+
+  const place = request.unit_number ? `House ${request.unit_number}` : "Common area";
+
+  notify_property_caretaker({
+    property_id: request.property_id,
+    permission: "can_manage_maintenance",
+    except_user_id: user.user_id,
+    title,
+    body: `${request.title} · ${place}${request.priority === "urgent" ? " · Urgent" : ""}`,
+    data: { type: "maintenance", repair_id: String(request.id) },
+    urgent: request.priority === "urgent",
+  }).catch((error) => console.error("[PUSH] Maintenance notification failed:", error.message));
+}
+
+const {
   apply_tenant_credits,
 } = require("../billing/billing_service");
 
@@ -157,7 +182,9 @@ async function ensure_property_access(
 
   const result = await client.query(
     `
-      SELECT properties.*
+      SELECT
+        properties.*,
+        property_caretaker_assignments.can_manage_maintenance
       FROM property_caretaker_assignments
       INNER JOIN properties
         ON properties.id =
@@ -179,6 +206,15 @@ async function ensure_property_access(
   if (!result.rows[0]) {
     const error = new Error(
       "You are not assigned to this property."
+    );
+
+    error.status_code = 403;
+    throw error;
+  }
+
+  if (result.rows[0].can_manage_maintenance !== true) {
+    const error = new Error(
+      "The owner has not given you access to maintenance for this property."
     );
 
     error.status_code = 403;
@@ -361,6 +397,12 @@ async function create_request(
       },
       ip_address,
     });
+
+    push_to_caretaker(
+      user,
+      { ...request, unit_number: unit?.unit_number || null },
+      "New maintenance issue"
+    );
 
     return public_request({
       ...request,
@@ -574,6 +616,7 @@ async function list_requests(user, filters) {
               maintenance_requests.property_id
               AND property_caretaker_assignments.caretaker_id = $6
               AND property_caretaker_assignments.status = 'active'
+              AND property_caretaker_assignments.can_manage_maintenance
           )
         )
 
@@ -1082,6 +1125,7 @@ async function list_caretaker_notices(user) {
         AND property_caretaker_assignments.caretaker_id = $1
         AND property_caretaker_assignments.owner_id = $2
         AND property_caretaker_assignments.status = 'active'
+        AND property_caretaker_assignments.can_manage_maintenance
       LEFT JOIN units
         ON units.id = maintenance_requests.unit_id
       WHERE maintenance_requests.owner_id = $2
@@ -1118,6 +1162,7 @@ async function mark_notices_seen(user) {
               maintenance_requests.property_id
             AND property_caretaker_assignments.caretaker_id = $1
             AND property_caretaker_assignments.status = 'active'
+            AND property_caretaker_assignments.can_manage_maintenance
           WHERE maintenance_requests.owner_id = $2
             AND maintenance_requests.caretaker_notice IS NOT NULL
         `,
@@ -1403,6 +1448,24 @@ async function update_request(
       ip_address
     );
 
+    // The owner gave it to the caretaker, or made one of theirs urgent.
+    const given =
+      updated.assigned_caretaker_id &&
+      String(updated.assigned_caretaker_id) !== String(existing.assigned_caretaker_id ?? "");
+    const made_urgent =
+      updated.priority === "urgent" &&
+      existing.priority !== "urgent" &&
+      updated.assigned_caretaker_id &&
+      ["reported", "in_progress"].includes(updated.status);
+
+    if (given || made_urgent) {
+      push_to_caretaker(
+        user,
+        { ...updated, unit_number: existing.unit_number },
+        given ? "Assigned to you" : "Marked urgent"
+      );
+    }
+
     return get_request_by_id(user, updated.id);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1445,6 +1508,7 @@ async function get_status_counts(user) {
               maintenance_requests.property_id
               AND property_caretaker_assignments.caretaker_id = $2
               AND property_caretaker_assignments.status = 'active'
+              AND property_caretaker_assignments.can_manage_maintenance
           )
         )
     `,

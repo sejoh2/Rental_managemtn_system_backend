@@ -44,7 +44,8 @@ async function ensure_property_access(
     await get_caretaker_property_access(
       client,
       user,
-      property_id
+      property_id,
+      "can_enter_electricity"
     );
   }
 

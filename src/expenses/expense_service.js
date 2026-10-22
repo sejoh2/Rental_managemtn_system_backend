@@ -138,7 +138,9 @@ async function ensure_property_access(
   if (user.role === "caretaker") {
     const result = await client.query(
       `
-        SELECT properties.*
+        SELECT
+          properties.*,
+          property_caretaker_assignments.can_add_expenses
         FROM property_caretaker_assignments
         INNER JOIN properties
           ON properties.id =
@@ -160,6 +162,15 @@ async function ensure_property_access(
     if (!result.rows[0]) {
       const error = new Error(
         "You are not assigned to this property."
+      );
+
+      error.status_code = 403;
+      throw error;
+    }
+
+    if (result.rows[0].can_add_expenses !== true) {
+      const error = new Error(
+        "The owner has not given you access to expenses for this property."
       );
 
       error.status_code = 403;

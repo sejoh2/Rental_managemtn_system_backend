@@ -1171,7 +1171,7 @@ async function get_tenant_statement(
         client,
         user,
         tenant.property_id,
-        "level_1"
+        "can_view_tenants"
       );
     }
 

@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const water_controller = require(
   "./water_controller"
@@ -18,6 +19,17 @@ const {
 } = require("../caretakers/caretaker_acting");
 
 const router = express.Router();
+
+/*
+  Per network address, far above normal use: totals are heavy queries.
+*/
+const totals_limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please wait a minute." },
+});
 
 
 /*
@@ -58,6 +70,7 @@ const reading_change_guard = [
       "water_meter_readings",
       "reading_id"
     ),
+    level: "can_read_meters",
   }),
 ];
 
@@ -75,7 +88,9 @@ router.get(
 
 router.get(
   "/properties/:property_id/water-billing/stats",
-  reading_guard,
+  totals_limiter,
+  // Billed and collected totals: the owner's alone.
+  guard,
   water_controller.get_water_stats
 );
 
