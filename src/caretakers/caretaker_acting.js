@@ -12,7 +12,7 @@ const {
   get_caretaker_property_access,
 } = require("./caretaker_access_service");
 
-const { PREFIX, is_id } = require("../utils/ids");
+const { PREFIX, is_id, id_or_throw } = require("../utils/ids");
 
 function refuse(message, status_code) {
   const error = new Error(message);
@@ -123,10 +123,17 @@ function as_owner({
 /*
   The property named in the address:
   /properties/:property_id/...
+  A malformed ID is refused with 422, as it is for the owner.
 */
 function property_in_path(req) {
-  return id_or_null(req.params.property_id, PREFIX.property);
+  return id_or_throw(req.params.property_id, "property", PREFIX.property);
 }
+
+// The kind of record each table holds, for the ID check below.
+const RECORD_KIND = {
+  tenants: [PREFIX.tenant, "tenant"],
+  water_meter_readings: [PREFIX.water_reading, "reading"],
+};
 
 /*
   The property of a record named in the address, such as the
@@ -134,12 +141,11 @@ function property_in_path(req) {
   the code, never from the request.
 */
 function property_of_record(table, param) {
-  return async function find_property(req, owner_id) {
-    const id = id_or_null(req.params[param]);
+  const [prefix, label] = RECORD_KIND[table] || [null, "record"];
 
-    if (!id) {
-      return null;
-    }
+  return async function find_property(req, owner_id) {
+    // A malformed ID is refused with 422, as it is for the owner.
+    const id = id_or_throw(req.params[param], label, prefix);
 
     const result = await db.query(
       `
