@@ -18,14 +18,16 @@ const {
 
 const db = require("../config/db");
 
+const { PREFIX, is_id } = require("../utils/ids");
+
 /*
   The property of the unit in /units/:unit_id, if it is in the
   owner's account (units carry no owner of their own).
 */
 async function property_of_unit(req, owner_id) {
-  const unit_id = Number(req.params.unit_id);
+  const unit_id = req.params.unit_id;
 
-  if (!Number.isInteger(unit_id) || unit_id < 1) {
+  if (!is_id(unit_id, PREFIX.unit)) {
     return null;
   }
 

@@ -14,6 +14,10 @@ const { send_sms } = require("../utils/sms_provider");
 const token_service = require("../security/token_service");
 
 const {
+  is_id,
+} = require("../utils/ids");
+
+const {
   log_audit,
 } = require("../audit/audit_service");
 
@@ -440,7 +444,10 @@ async function refresh(refresh_token) {
     throw new Error("Invalid refresh token.");
   }
 
-  if (!decoded.sid) {
+  if (
+    !is_id(decoded.sid, "ses") ||
+    !is_id(decoded.user_id, "usr")
+  ) {
     throw new Error("Invalid refresh token.");
   }
 

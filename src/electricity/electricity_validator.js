@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const period_schema = z.string()
   .regex(/^\d{4}-(0[1-9]|1[0-2])$/, {
@@ -18,9 +19,7 @@ const save_bills_schema = z.object({
 
   bills: z.array(
     z.object({
-      unit_id: z.coerce.number()
-        .int()
-        .positive(),
+      unit_id: zid("unt", "unit"),
 
       amount: z.coerce.number()
         .min(0),
@@ -50,18 +49,7 @@ function validate(schema, data) {
 }
 
 function validate_property_id(value) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      "A valid property ID is required."
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+  return id_or_throw(value, "property", "prp");
 }
 
 module.exports = {

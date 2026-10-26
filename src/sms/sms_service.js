@@ -158,8 +158,8 @@ function leave_out_settled(
 
 function public_template(template) {
   return {
-    id: Number(template.id),
-    owner_id: Number(template.owner_id),
+    id: template.id,
+    owner_id: template.owner_id,
     name: template.name,
     body: template.body,
     created_at: template.created_at,
@@ -169,25 +169,19 @@ function public_template(template) {
 
 function public_broadcast(broadcast) {
   return {
-    id: Number(broadcast.id),
-    owner_id: Number(broadcast.owner_id),
+    id: broadcast.id,
+    owner_id: broadcast.owner_id,
 
-    template_id: broadcast.template_id
-      ? Number(broadcast.template_id)
-      : null,
+    template_id: broadcast.template_id || null,
 
     template_name: broadcast.template_name,
     message_template: broadcast.message_template,
 
     recipient_group: broadcast.recipient_group,
 
-    property_id: broadcast.property_id
-      ? Number(broadcast.property_id)
-      : null,
+    property_id: broadcast.property_id || null,
 
-    tenant_id: broadcast.tenant_id
-      ? Number(broadcast.tenant_id)
-      : null,
+    tenant_id: broadcast.tenant_id || null,
 
     variables: broadcast.variables || {},
 
@@ -214,24 +208,18 @@ function public_broadcast(broadcast) {
 
 function public_message(message) {
   return {
-    id: Number(message.id),
+    id: message.id,
 
     /*
       null for a single message sent outside a broadcast.
     */
-    broadcast_id: message.broadcast_id
-      ? Number(message.broadcast_id)
-      : null,
+    broadcast_id: message.broadcast_id || null,
 
-    property_id: message.property_id
-      ? Number(message.property_id)
-      : null,
+    property_id: message.property_id || null,
 
     property_name: message.property_name || null,
 
-    tenant_id: message.tenant_id
-      ? Number(message.tenant_id)
-      : null,
+    tenant_id: message.tenant_id || null,
 
     tenant_name: message.tenant_name,
     unit_number: message.unit_number || null,
@@ -754,7 +742,7 @@ async function estimate_recipients(owner, target) {
         in the estimate endpoint.
       */
       recipients: recipients.map((tenant) => ({
-        tenant_id: Number(tenant.id),
+        tenant_id: tenant.id,
         tenant_name: tenant.full_name,
         unit_number: tenant.unit_number,
         property_name: tenant.property_name,
@@ -966,7 +954,7 @@ async function create_broadcast(owner, data) {
 
     await client.query("COMMIT");
 
-    broadcast_id = Number(broadcast.id);
+    broadcast_id = broadcast.id;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1233,8 +1221,8 @@ async function dispatch_due_broadcasts() {
   for (const broadcast of result.rows) {
     try {
       await dispatch_broadcast(
-        Number(broadcast.id),
-        Number(broadcast.owner_id)
+        broadcast.id,
+        broadcast.owner_id
       );
     } catch (error) {
       console.error(
@@ -1340,12 +1328,12 @@ async function list_messages(owner, filters) {
       WHERE sms_messages.owner_id = $1
 
         AND (
-          $2::BIGINT IS NULL
+          $2::record_id IS NULL
           OR sms_messages.property_id = $2
         )
 
         AND (
-          $3::BIGINT IS NULL
+          $3::record_id IS NULL
           OR sms_messages.tenant_id = $3
         )
 
@@ -1820,7 +1808,7 @@ async function retry_message(
     return;
   }
 
-  const broadcast_id = Number(message.broadcast_id);
+  const broadcast_id = message.broadcast_id;
 
   await db.query(
     `

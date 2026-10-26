@@ -53,7 +53,7 @@ async function ensure_phone_is_free(phone, except_user_id) {
       WHERE phone = $1
         AND user_id <> $2
     `,
-    [phone, except_user_id || 0]
+    [phone, except_user_id || ""]
   );
 
   const taken = result.rows[0];
@@ -307,14 +307,12 @@ async function demote_owner({
 
 function public_user(user) {
   return {
-    user_id: Number(user.user_id),
+    user_id: user.user_id,
     first_name: user.first_name,
     last_name: user.last_name,
     phone: user.phone,
     role: user.role,
-    owner_id: user.owner_id
-      ? Number(user.owner_id)
-      : null,
+    owner_id: user.owner_id || null,
     status: user.status,
     last_login_at: user.last_login_at,
     created_at: user.created_at,

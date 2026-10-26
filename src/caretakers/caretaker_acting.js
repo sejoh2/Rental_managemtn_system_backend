@@ -12,6 +12,8 @@ const {
   get_caretaker_property_access,
 } = require("./caretaker_access_service");
 
+const { PREFIX, is_id } = require("../utils/ids");
+
 function refuse(message, status_code) {
   const error = new Error(message);
 
@@ -19,10 +21,9 @@ function refuse(message, status_code) {
   return error;
 }
 
-function positive_id(value) {
-  const id = Number(value);
-
-  return Number.isInteger(id) && id > 0 ? id : null;
+// A record ID (of the kind prefix, when given), or null.
+function id_or_null(value, prefix = null) {
+  return is_id(value, prefix) ? value : null;
 }
 
 /*
@@ -59,10 +60,11 @@ function as_owner({
 
       const found = await property(req, caretaker.owner_id);
 
-      const property_id = positive_id(
+      const property_id = id_or_null(
         found && typeof found === "object"
           ? found.property_id
-          : found
+          : found,
+        PREFIX.property
       );
 
       if (!property_id) {
@@ -123,7 +125,7 @@ function as_owner({
   /properties/:property_id/...
 */
 function property_in_path(req) {
-  return positive_id(req.params.property_id);
+  return id_or_null(req.params.property_id, PREFIX.property);
 }
 
 /*
@@ -133,7 +135,7 @@ function property_in_path(req) {
 */
 function property_of_record(table, param) {
   return async function find_property(req, owner_id) {
-    const id = positive_id(req.params[param]);
+    const id = id_or_null(req.params[param]);
 
     if (!id) {
       return null;

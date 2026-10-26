@@ -1,19 +1,11 @@
 const { z } = require("zod");
 
-const user_id_schema = z.object({
-  user_id: z.coerce.number().int().positive(),
-});
+const {
+  id_or_throw,
+} = require("../utils/ids");
 
 function validate_user_id(params) {
-  const result = user_id_schema.safeParse(params);
-
-  if (!result.success) {
-    const error = new Error("A valid user ID is required.");
-    error.status_code = 422;
-    throw error;
-  }
-
-  return result.data.user_id;
+  return id_or_throw(params?.user_id, "user", "usr");
 }
 
 /*

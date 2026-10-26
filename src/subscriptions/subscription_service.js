@@ -39,14 +39,14 @@ const SUBSCRIPTION_COLUMNS = `
 `;
 
 const INVOICE_COLUMNS = `
-  invoice_id, owner_id, kind, period_start::TEXT AS period_start,
+  invoice_id, invoice_number::INT AS invoice_number, owner_id, kind, period_start::TEXT AS period_start,
   period_end::TEXT AS period_end, months, base_amount, discount_amount,
   discount_id, carried_amount, amount_due, custom_amount_reason, status,
   void_reason, auto_stk_at, created_at, paid_at
 `;
 
 const PAYMENT_COLUMNS = `
-  payment_id, owner_id, invoice_id, method, amount, mpesa_receipt,
+  payment_id, receipt_number::INT AS receipt_number, owner_id, invoice_id, method, amount, mpesa_receipt,
   reference, phone, paid_on::TEXT AS paid_on, note, recorded_by, created_at
 `;
 
@@ -113,7 +113,6 @@ async function sync_price_from_env() {
     user_id: null,
     action: "SUBSCRIPTION_PRICE_SET_FROM_ENV",
     entity_type: "subscription_settings",
-    entity_id: 1,
     metadata: { before: { monthly_price: before }, after: { monthly_price: env_price }, applies_from: new Date().toISOString() },
   });
 
@@ -332,7 +331,7 @@ async function settle_invoice(client, invoice_id) {
   await client.query(
     `UPDATE subscription_invoices SET status = 'void', void_reason = $3
      WHERE owner_id = $1 AND status = 'open' AND period_start <= $2::DATE`,
-    [invoice.owner_id, paid_through, `Covered by bill #${invoice.invoice_id}.`]
+    [invoice.owner_id, paid_through, `Covered by bill #${invoice.invoice_number}.`]
   );
 
   return { ...invoice, status: "paid", paid_through };
@@ -951,7 +950,6 @@ async function update_settings(admin, changes, ip_address) {
     user_id: admin.user_id,
     action: "SUBSCRIPTION_SETTINGS_CHANGED",
     entity_type: "subscription_settings",
-    entity_id: 1,
     metadata: { before: { monthly_price: before.monthly_price, grace_days: before.grace_days }, after: { monthly_price: after.monthly_price, grace_days: after.grace_days }, reason: changes.reason },
     ip_address,
   });
@@ -991,7 +989,6 @@ async function update_plan(admin, months, changes, ip_address) {
     user_id: admin.user_id,
     action: "SUBSCRIPTION_PLAN_CHANGED",
     entity_type: "subscription_plan",
-    entity_id: months,
     metadata: { months, before: summary(before), after: { ...summary(after), price: after.price }, reason: changes.reason },
     ip_address,
   });

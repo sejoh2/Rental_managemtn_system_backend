@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw } = require("../utils/ids");
 
 const water_methods = [
   "per_unit_metered",
@@ -195,19 +196,8 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -261,11 +251,11 @@ module.exports = {
     ),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    validate_id(value, "property", "prp"),
 
   validate_unit_id: (value) =>
-    validate_id(value, "unit"),
+    validate_id(value, "unit", "unt"),
 
   validate_reading_id: (value) =>
-    validate_id(value, "water reading"),
+    validate_id(value, "water reading", "wrd"),
 };

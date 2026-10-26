@@ -7,9 +7,9 @@ const {
 async function init_sms_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS sms_templates (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('smt'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -27,13 +27,13 @@ async function init_sms_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS sms_broadcasts (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('smb'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      template_id BIGINT
+      template_id record_id
         REFERENCES sms_templates(id)
         ON DELETE SET NULL,
 
@@ -55,11 +55,11 @@ async function init_sms_tables() {
           )
         ),
 
-      property_id BIGINT
+      property_id record_id
         REFERENCES properties(id)
         ON DELETE SET NULL,
 
-      tenant_id BIGINT
+      tenant_id record_id
         REFERENCES tenants(id)
         ON DELETE SET NULL,
 
@@ -80,7 +80,7 @@ async function init_sms_tables() {
         ),
 
       cancelled_at TIMESTAMPTZ,
-      cancelled_by BIGINT
+      cancelled_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -89,21 +89,21 @@ async function init_sms_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS sms_messages (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('sms'),
 
-      broadcast_id BIGINT NOT NULL
+      broadcast_id record_id NOT NULL
         REFERENCES sms_broadcasts(id)
         ON DELETE CASCADE,
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT
+      property_id record_id
         REFERENCES properties(id)
         ON DELETE SET NULL,
 
-      tenant_id BIGINT
+      tenant_id record_id
         REFERENCES tenants(id)
         ON DELETE SET NULL,
 
@@ -218,7 +218,7 @@ async function init_sms_tables() {
       );
 
     CREATE TABLE IF NOT EXISTS sms_template_seeds (
-      owner_id BIGINT PRIMARY KEY
+      owner_id record_id PRIMARY KEY
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 

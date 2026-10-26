@@ -10,9 +10,9 @@ const db = require("../config/db");
 async function init_push_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS push_devices (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pdv'),
 
-      user_id BIGINT NOT NULL
+      user_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -29,9 +29,9 @@ async function init_push_tables() {
       ON push_devices(user_id);
 
     CREATE TABLE IF NOT EXISTS push_outbox (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pob'),
 
-      user_id BIGINT NOT NULL
+      user_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 

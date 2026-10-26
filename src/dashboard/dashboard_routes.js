@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const { zid } = require("../utils/ids");
 
 const dashboard_service = require("./dashboard_service");
 
@@ -14,9 +15,7 @@ const {
 const router = express.Router();
 
 const home_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 });
 

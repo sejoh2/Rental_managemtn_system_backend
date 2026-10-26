@@ -12,13 +12,13 @@ async function init_service_charge_tables() {
       they move in.
     */
     CREATE TABLE IF NOT EXISTS service_charges (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('svc'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -62,7 +62,7 @@ async function init_service_charge_tables() {
 
       archived_at TIMESTAMPTZ,
 
-      created_by BIGINT
+      created_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -78,13 +78,13 @@ async function init_service_charge_tables() {
       own amount. Zero means the unit is not charged.
     */
     CREATE TABLE IF NOT EXISTS service_charge_units (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('scu'),
 
-      service_charge_id BIGINT NOT NULL
+      service_charge_id record_id NOT NULL
         REFERENCES service_charges(id)
         ON DELETE CASCADE,
 
-      unit_id BIGINT NOT NULL
+      unit_id record_id NOT NULL
         REFERENCES units(id)
         ON DELETE CASCADE,
 

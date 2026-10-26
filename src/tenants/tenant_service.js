@@ -28,8 +28,8 @@ const {
 */
 function account_owner_id(user) {
   return user.role === "caretaker"
-    ? Number(user.owner_id)
-    : Number(user.user_id);
+    ? user.owner_id
+    : user.user_id;
 }
 
 /*
@@ -55,11 +55,11 @@ async function ensure_caretaker_access(
 
 function public_tenant(tenant) {
   return {
-    id: Number(tenant.id),
+    id: tenant.id,
 
-    owner_id: Number(tenant.owner_id),
-    property_id: Number(tenant.property_id),
-    unit_id: Number(tenant.unit_id),
+    owner_id: tenant.owner_id,
+    property_id: tenant.property_id,
+    unit_id: tenant.unit_id,
 
     unit_number: tenant.unit_number || null,
     property_name: tenant.property_name || null,
@@ -540,7 +540,7 @@ async function list_tenants(owner, filters) {
       WHERE tenants.owner_id = $1
         AND properties.status != 'archived'
         AND (
-          $2::BIGINT IS NULL
+          $2::record_id IS NULL
           OR tenants.property_id = $2
         )
         AND (
@@ -791,7 +791,7 @@ async function move_out_tenant(
       [
         JSON.stringify(
           charges_before.rows.map((charge) => ({
-            id: Number(charge.id),
+            id: charge.id,
             amount_due: Number(charge.amount_due),
             status: charge.status,
           }))
@@ -1087,8 +1087,8 @@ async function undo_move_out(
       entity_type: "tenant",
       entity_id: tenant_id,
       metadata: {
-        property_id: Number(tenant.property_id),
-        unit_id: Number(tenant.unit_id),
+        property_id: tenant.property_id,
+        unit_id: tenant.unit_id,
         unit_number: tenant.unit_number,
         reason: data.reason,
         charges_restored,

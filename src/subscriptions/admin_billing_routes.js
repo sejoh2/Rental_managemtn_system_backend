@@ -15,6 +15,7 @@ const payments = require("./subscription_payment_service");
 const mpesa = require("./subscription_mpesa");
 const dates = require("./subscription_dates");
 const { send_receipt, parse, respond } = require("./subscription_routes");
+const { PREFIX, id_or_throw } = require("../utils/ids");
 
 /*
   The admin's Billing page: every landlord's account, and the
@@ -36,7 +37,7 @@ router.use(admin_limiter);
 router.use(authenticate);
 router.use(require_role("admin"));
 
-const id_param = z.coerce.number().int().positive();
+const owner_param = (req) => id_or_throw(req.params.owner_id, "landlord", PREFIX.user);
 const reason = z.string().trim().min(3, "Give a reason (at least 3 characters).").max(500);
 
 router.get(
@@ -98,18 +99,18 @@ router.put(
   )
 );
 
-router.get("/owners/:owner_id", respond((req) => subscriptions.account_detail(parse(id_param, req.params.owner_id))));
+router.get("/owners/:owner_id", respond((req) => subscriptions.account_detail(owner_param(req))));
 
 const months_schema = z.object({ months: z.number().int().min(1).max(12), reason }).strict();
 
 router.post(
   "/owners/:owner_id/extend-trial",
-  respond((req) => subscriptions.extend_trial(req.user, parse(id_param, req.params.owner_id), parse(months_schema, req.body || {}), req.ip))
+  respond((req) => subscriptions.extend_trial(req.user, owner_param(req), parse(months_schema, req.body || {}), req.ip))
 );
 
 router.post(
   "/owners/:owner_id/end-grace",
-  respond((req) => subscriptions.end_grace(req.user, parse(id_param, req.params.owner_id), parse(z.object({ reason }).strict(), req.body || {}), req.ip))
+  respond((req) => subscriptions.end_grace(req.user, owner_param(req), parse(z.object({ reason }).strict(), req.body || {}), req.ip))
 );
 
 router.post(
@@ -117,7 +118,7 @@ router.post(
   respond((req) =>
     subscriptions.end_trial(
       req.user,
-      parse(id_param, req.params.owner_id),
+      owner_param(req),
       parse(z.object({ first_bill: z.enum(["full", "prorated", "next_month"]), reason }).strict(), req.body || {}),
       req.ip
     )
@@ -126,7 +127,7 @@ router.post(
 
 router.post(
   "/owners/:owner_id/free-months",
-  respond((req) => subscriptions.give_free_months(req.user, parse(id_param, req.params.owner_id), parse(months_schema, req.body || {}), req.ip))
+  respond((req) => subscriptions.give_free_months(req.user, owner_param(req), parse(months_schema, req.body || {}), req.ip))
 );
 
 router.post(
@@ -134,7 +135,7 @@ router.post(
   respond((req) =>
     subscriptions.create_discount(
       req.user,
-      parse(id_param, req.params.owner_id),
+      owner_param(req),
       parse(
         z
           .object({
@@ -154,7 +155,7 @@ router.post(
 
 router.post(
   "/discounts/:discount_id/end",
-  respond((req) => subscriptions.end_discount(req.user, parse(id_param, req.params.discount_id), parse(z.object({ reason }).strict(), req.body || {}), req.ip))
+  respond((req) => subscriptions.end_discount(req.user, id_or_throw(req.params.discount_id, "discount", PREFIX.subscription_discount), parse(z.object({ reason }).strict(), req.body || {}), req.ip))
 );
 
 router.put(
@@ -162,7 +163,7 @@ router.put(
   respond((req) =>
     subscriptions.set_invoice_amount(
       req.user,
-      parse(id_param, req.params.invoice_id),
+      id_or_throw(req.params.invoice_id, "bill", PREFIX.subscription_invoice),
       parse(z.object({ amount: z.number().int().min(1).max(10000000), remainder: z.enum(["forgive", "carry"]), reason }).strict(), req.body || {}),
       req.ip
     )
@@ -184,7 +185,7 @@ router.post(
         .strict(),
       req.body || {}
     );
-    const result = await subscriptions.record_manual_payment(req.user, parse(id_param, req.params.invoice_id), body, req.ip);
+    const result = await subscriptions.record_manual_payment(req.user, id_or_throw(req.params.invoice_id, "bill", PREFIX.subscription_invoice), body, req.ip);
 
     await payments.notify_owner(
       result.payment.owner_id,
@@ -201,13 +202,13 @@ router.post(
   respond((req) => {
     const body = parse(z.object({ phone: z.string().trim().max(20).optional() }).strict(), req.body || {});
 
-    return payments.request_payment({ owner_id: parse(id_param, req.params.owner_id), phone_input: body.phone, requested_by: req.user.user_id, ip_address: req.ip, show_details: true });
+    return payments.request_payment({ owner_id: owner_param(req), phone_input: body.phone, requested_by: req.user.user_id, ip_address: req.ip, show_details: true });
   })
 );
 
 router.get("/receipts/:payment_id", async (req, res, next) => {
   try {
-    return await send_receipt(res, parse(id_param, req.params.payment_id));
+    return await send_receipt(res, id_or_throw(req.params.payment_id, "payment", PREFIX.subscription_payment));
   } catch (error) {
     return next(error);
   }

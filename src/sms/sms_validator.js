@@ -1,5 +1,7 @@
 const { z } = require("zod");
 
+const { PREFIX, id_or_throw, zid } = require("../utils/ids");
+
 const recipient_groups = [
   "all_active_tenants",
   "tenants_with_arrears",
@@ -40,14 +42,10 @@ const update_template_schema = template_schema.partial()
 const recipient_target_schema = z.object({
   recipient_group: z.enum(recipient_groups),
 
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid(PREFIX.property, "property")
     .optional(),
 
-  tenant_id: z.coerce.number()
-    .int()
-    .positive()
+  tenant_id: zid(PREFIX.tenant, "tenant")
     .optional(),
 }).superRefine((data, context) => {
   if (
@@ -96,9 +94,7 @@ const recipient_target_schema = z.object({
 });
 
 const broadcast_schema = recipient_target_schema.extend({
-  template_id: z.coerce.number()
-    .int()
-    .positive()
+  template_id: zid(PREFIX.sms_template, "SMS template")
     .optional(),
 
   /*
@@ -151,14 +147,10 @@ const broadcast_schema = recipient_target_schema.extend({
 });
 
 const list_messages_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid(PREFIX.property, "property")
     .optional(),
 
-  tenant_id: z.coerce.number()
-    .int()
-    .positive()
+  tenant_id: zid(PREFIX.tenant, "tenant")
     .optional(),
 
   status: z.enum([
@@ -211,21 +203,6 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
-}
-
 module.exports = {
   validate_create_template: (data) =>
     validate(
@@ -270,11 +247,11 @@ module.exports = {
     ),
 
   validate_template_id: (value) =>
-    validate_id(value, "SMS template"),
+    id_or_throw(value, "SMS template", PREFIX.sms_template),
 
   validate_broadcast_id: (value) =>
-    validate_id(value, "SMS broadcast"),
+    id_or_throw(value, "SMS broadcast", PREFIX.sms_broadcast),
 
   validate_message_id: (value) =>
-    validate_id(value, "SMS message"),
+    id_or_throw(value, "SMS message", PREFIX.sms_message),
 };

@@ -4,6 +4,7 @@ const { rateLimit } = require("express-rate-limit");
 
 const analytics = require("./analytics_service");
 const token_service = require("../security/token_service");
+const { is_id } = require("../utils/ids");
 
 const {
   authenticate,
@@ -66,6 +67,8 @@ function viewer(req) {
 
   try {
     const decoded = token_service.verify_access_token(header.slice(7));
+
+    if (!is_id(decoded.user_id, "usr")) return null;
 
     return { user_id: decoded.user_id, role: decoded.role };
   } catch {

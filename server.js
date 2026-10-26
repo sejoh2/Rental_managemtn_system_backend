@@ -133,6 +133,9 @@ async function start_server() {
       `[DATABASE] Connected successfully: ${database.database_name} as ${database.database_user}`
     );
 
+    // Text record IDs: the type and function every table uses (src/utils/ids.js).
+    await require("./src/utils/ids").init_id_function();
+
     console.log("[STARTUP] Initializing authentication tables...");
 
     await init_auth_tables();

@@ -157,7 +157,7 @@ async function get_owner_detail(owner_id) {
 
   return {
     owner: {
-      user_id: Number(owner.user_id),
+      user_id: owner.user_id,
       name: full_name(owner.first_name, owner.last_name),
       phone: owner.phone,
       email: owner.email || null,
@@ -195,7 +195,7 @@ async function get_owner_detail(owner_id) {
     },
 
     properties: properties.rows.map((property) => ({
-      id: Number(property.id),
+      id: property.id,
       name: property.name,
       location: property.location,
       status: property.status,
@@ -209,7 +209,7 @@ async function get_owner_detail(owner_id) {
     })),
 
     caretakers: caretakers.rows.map((caretaker) => ({
-      user_id: Number(caretaker.user_id),
+      user_id: caretaker.user_id,
       name: full_name(
         caretaker.first_name,
         caretaker.last_name
@@ -270,7 +270,7 @@ async function get_sms_usage() {
   `);
 
   const owners = result.rows.map((row) => ({
-    owner_id: Number(row.user_id),
+    owner_id: row.user_id,
     name: full_name(row.first_name, row.last_name),
     phone: row.phone,
     messages: Number(row.messages),

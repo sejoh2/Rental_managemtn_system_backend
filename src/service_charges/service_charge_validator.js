@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const categories = [
   "repairs_maintenance",
@@ -15,9 +16,7 @@ const categories = [
 */
 const unit_amounts_schema = z.array(
   z.object({
-    unit_id: z.coerce.number()
-      .int()
-      .positive(),
+    unit_id: zid("unt", "unit"),
 
     amount: z.coerce.number()
       .min(0),
@@ -107,19 +106,8 @@ function validate(schema, data) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -130,8 +118,8 @@ module.exports = {
     validate(update_service_charge_schema, data),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    validate_id(value, "property", "prp"),
 
   validate_service_charge_id: (value) =>
-    validate_id(value, "service charge"),
+    validate_id(value, "service charge", "svc"),
 };

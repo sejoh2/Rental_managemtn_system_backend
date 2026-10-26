@@ -220,7 +220,10 @@ paths:
         grace_ends_on, monthly_price), `open_invoice`, enabled prepaid
         `plans` with their price, `invoices`, `payments`, `discount`,
         `pending_payment` and `sign_in_phone`. Amounts are whole
-        shillings. A read-only account can still read, download and
+        shillings. IDs are text (`invoice_id` inv_..., `payment_id`
+        spy_..., `stk_id` stk_...); bills also have `invoice_number`
+        (shown as "bill #12") and payments `receipt_number` (shown as
+        KODI-R-000012), numbers for people, never used in addresses. A read-only account can still read, download and
         pay; every other change is refused with 403 and
         `code: account_read_only` (owners and their caretakers).
       security:
@@ -242,7 +245,8 @@ paths:
         prepaid plan (`plan_months`). The amount always comes from the
         bill. `phone` defaults to the owner's sign-in phone. One prompt
         per 90 seconds and 3 per 10 minutes per owner. 503 when Kodi's
-        till is not set up on the server.
+        till is not set up on the server. The M-Pesa account reference
+        is the bill number, KODI-B000012 (`invoice_number`).
       security:
         - bearerAuth: []
       requestBody:
@@ -279,7 +283,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: The request
@@ -292,6 +296,7 @@ paths:
     get:
       tags: [Kodi billing]
       summary: Receipt PDF for one of the owner's payments
+      description: The file is named after the receipt number, e.g. KODI-R-000012.pdf.
       security:
         - bearerAuth: []
       parameters:
@@ -299,7 +304,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: PDF (not cached)
@@ -386,7 +391,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: The owner whose account was opened
@@ -410,7 +415,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: Owner account
@@ -508,7 +513,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       requestBody:
         required: true
         content:
@@ -546,7 +551,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: The entry and related entries
@@ -582,7 +587,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: The user, now with the role user
@@ -603,7 +608,7 @@ paths:
         `kind` is tenant_document, expense_receipt or
         meter_photo, and `target_id` is the tenant, expense or water
         reading. The record must belong to the owner.
-        GET /api/files/counts?kind=...&target_ids=1,2,3 returns how many
+        GET /api/files/counts?kind=...&target_ids=<id>,<id> returns how many
         files each record has.
       security:
         - bearerAuth: []
@@ -618,7 +623,7 @@ paths:
           in: query
           required: true
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
       responses:
         "200":
           description: Files, newest first
@@ -843,11 +848,11 @@ paths:
         - name: owner_id
           in: query
           description: Only entries belonging to this owner account.
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
         - name: user_id
           in: query
           description: Only entries performed by this user.
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
         - name: action
           in: query
           schema: { type: string, example: MANUAL_PAYMENT_RECORDED }
@@ -1294,7 +1299,7 @@ paths:
         - name: property_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: status
           in: query
           schema:
@@ -1442,7 +1447,7 @@ paths:
       parameters:
         - name: property_id
           in: query
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
         - name: from_date
           in: query
           schema: { type: string, format: date }
@@ -1792,7 +1797,7 @@ paths:
         - name: reading_id
           in: path
           required: true
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
       requestBody:
         required: true
         content:
@@ -1819,7 +1824,7 @@ paths:
                   data:
                     type: object
                     properties:
-                      id: { type: integer }
+                      id: { $ref: "#/components/schemas/RecordId" }
                       status: { type: string, example: rejected }
                       returned_as_credit: { type: number, example: 800 }
         "409":
@@ -1943,7 +1948,7 @@ paths:
         - name: property_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: status
           in: query
           schema:
@@ -2162,7 +2167,7 @@ paths:
       parameters:
         - name: property_id
           in: query
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
         - name: from_date
           in: query
           schema: { type: string, format: date }
@@ -2410,7 +2415,7 @@ paths:
                     type: object
                     required: [unit_id, amount]
                     properties:
-                      unit_id: { type: integer }
+                      unit_id: { $ref: "#/components/schemas/RecordId" }
                       amount: { type: number, example: 850 }
       responses:
         "200":
@@ -2556,11 +2561,11 @@ paths:
         - name: property_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: unit_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: status
           in: query
           schema:
@@ -2767,7 +2772,7 @@ paths:
                     items:
                       type: object
                       properties:
-                        id: { type: integer }
+                        id: { $ref: "#/components/schemas/RecordId" }
                         name: { type: string }
                         location: { type: string }
                         rent_due_day: { type: integer }
@@ -3135,11 +3140,11 @@ paths:
         - name: property_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: tenant_id
           in: query
           schema:
-            type: integer
+            $ref: "#/components/schemas/RecordId"
         - name: status
           in: query
           schema:
@@ -3296,7 +3301,7 @@ paths:
         - name: property_id
           in: query
           description: One property. Omit for all properties.
-          schema: { type: integer }
+          schema: { $ref: "#/components/schemas/RecordId" }
       responses:
         "200":
           description: Dashboard figures
@@ -3483,128 +3488,112 @@ components:
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     PropertyId:
       name: property_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     PaymentAccountId:
       name: payment_account_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     UnitId:
       name: unit_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     TenantId:
       name: tenant_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     PaymentId:
       name: payment_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     ReadingId:
       name: reading_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     AgreementId:
       name: agreement_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     ExpenseId:
       name: expense_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     ServiceChargeId:
       name: service_charge_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     MaintenanceRequestId:
       name: request_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     CaretakerId:
       name: caretaker_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     TemplateId:
       name: template_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     BroadcastId:
       name: broadcast_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     SmsMessageId:
       name: message_id
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     ReportPropertyId:
       name: property_id
       in: query
       required: false
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
     ReportPeriod:
       name: period
@@ -3620,8 +3609,7 @@ components:
       in: query
       required: false
       schema:
-        type: integer
-        minimum: 1
+        $ref: "#/components/schemas/RecordId"
 
   responses:
     UnauthorizedError:
@@ -3653,6 +3641,15 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    RecordId:
+      type: string
+      description: |
+        A record's ID: a three-letter prefix for the kind of record
+        (usr, prp, unt, tnt, pay, inv...), "_" and 22 characters.
+        Made by the server; sorting IDs sorts records oldest first.
+      pattern: "^[a-z]{3}_[0-9A-HJKMNP-TV-Z]{22}$"
+      example: tnt_01M5W5F7ZM0001TMDJCR3F
+
     HealthResponse:
       type: object
       properties:
@@ -3730,7 +3727,7 @@ components:
     User:
       type: object
       properties:
-        user_id: { type: integer, example: 3 }
+        user_id: { $ref: "#/components/schemas/RecordId" }
         first_name: { type: string, example: Mary }
         last_name: { type: string, example: Wanjiru }
         phone: { type: string, example: "+254712345678" }
@@ -3742,7 +3739,8 @@ components:
           type: string
           enum: [admin, user, owner, caretaker]
         owner_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           nullable: true
         status:
           type: string
@@ -3826,7 +3824,8 @@ components:
         account:
           $ref: "#/components/schemas/MpesaAccount"
         property_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           description: Only when an existing property is changing this account.
 
     PaymentConnectionResponse:
@@ -3925,8 +3924,8 @@ components:
     Property:
       type: object
       properties:
-        id: { type: integer }
-        owner_id: { type: integer }
+        id: { $ref: "#/components/schemas/RecordId" }
+        owner_id: { $ref: "#/components/schemas/RecordId" }
         name: { type: string }
         location: { type: string }
         property_type: { type: string }
@@ -3965,7 +3964,7 @@ components:
           type: object
           nullable: true
           properties:
-            caretaker_id: { type: integer }
+            caretaker_id: { $ref: "#/components/schemas/RecordId" }
             full_name: { type: string }
             phone: { type: string }
             permission_level:
@@ -4099,8 +4098,8 @@ components:
     Unit:
       type: object
       properties:
-        id: { type: integer }
-        property_id: { type: integer }
+        id: { $ref: "#/components/schemas/RecordId" }
+        property_id: { $ref: "#/components/schemas/RecordId" }
         unit_number: { type: string }
         unit_type: { type: string }
         monthly_rent: { type: number }
@@ -4113,7 +4112,7 @@ components:
           nullable: true
           description: The active tenant and their outstanding balance, if the unit is occupied.
           properties:
-            tenant_id: { type: integer }
+            tenant_id: { $ref: "#/components/schemas/RecordId" }
             full_name: { type: string }
             status: { type: string }
             balance: { type: number }
@@ -4138,7 +4137,7 @@ components:
       type: object
       required: [unit_id, full_name, phone, move_in_date]
       properties:
-        unit_id: { type: integer, example: 1 }
+        unit_id: { $ref: "#/components/schemas/RecordId" }
         full_name: { type: string, example: Daraja Test Tenant }
         phone:
           type: string
@@ -4192,10 +4191,10 @@ components:
     Tenant:
       type: object
       properties:
-        id: { type: integer }
-        owner_id: { type: integer }
-        property_id: { type: integer }
-        unit_id: { type: integer }
+        id: { $ref: "#/components/schemas/RecordId" }
+        owner_id: { $ref: "#/components/schemas/RecordId" }
+        property_id: { $ref: "#/components/schemas/RecordId" }
+        unit_id: { $ref: "#/components/schemas/RecordId" }
         unit_number: { type: string }
         property_name: { type: string }
         balance:
@@ -4235,7 +4234,7 @@ components:
       type: object
       required: [tenant_id]
       properties:
-        tenant_id: { type: integer }
+        tenant_id: { $ref: "#/components/schemas/RecordId" }
         remember_payment_phone:
           type: boolean
           default: false
@@ -4266,7 +4265,7 @@ components:
       type: object
       required: [payment_account_id, phone, amount]
       properties:
-        payment_account_id: { type: integer }
+        payment_account_id: { $ref: "#/components/schemas/RecordId" }
         phone: { type: string, example: "0708374149" }
         amount: { type: number, example: 10000 }
         bill_reference: { type: string, example: A1-TENANT }
@@ -4274,13 +4273,15 @@ components:
     Payment:
       type: object
       properties:
-        id: { type: integer }
-        property_id: { type: integer }
+        id: { $ref: "#/components/schemas/RecordId" }
+        property_id: { $ref: "#/components/schemas/RecordId" }
         unit_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           nullable: true
         tenant_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           nullable: true
         amount: { type: number }
         payment_method: { type: string }
@@ -4435,7 +4436,7 @@ components:
             type: object
             required: [unit_id, amount]
             properties:
-              unit_id: { type: integer }
+              unit_id: { $ref: "#/components/schemas/RecordId" }
               amount: { type: number, example: 500 }
 
     UpdateServiceChargeRequest:
@@ -4453,7 +4454,7 @@ components:
             type: object
             required: [unit_id, amount]
             properties:
-              unit_id: { type: integer }
+              unit_id: { $ref: "#/components/schemas/RecordId" }
               amount: { type: number }
 
     CreateExpenseRequest:
@@ -4480,7 +4481,8 @@ components:
       required: [title]
       properties:
         unit_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           nullable: true
         title: { type: string, example: Leaking kitchen tap }
         description:
@@ -4515,7 +4517,8 @@ components:
           type: string
           enum: [low, normal, high, urgent]
         assigned_caretaker_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           nullable: true
         assigned_vendor_name:
           type: string
@@ -4595,10 +4598,12 @@ components:
           type: string
           enum: [all_active_tenants, tenants_with_arrears, tenants_with_credit_balance, property, specific_tenant]
         property_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           description: Required only when recipient_group is property.
         tenant_id:
-          type: integer
+          allOf:
+            - $ref: "#/components/schemas/RecordId"
           description: Required only when recipient_group is specific_tenant.
 
     CreateSmsBroadcastRequest:
@@ -4607,7 +4612,7 @@ components:
         - type: object
           properties:
             template_id:
-              type: integer
+              $ref: "#/components/schemas/RecordId"
             message:
               type: string
               description: Required when template_id is omitted.

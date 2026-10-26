@@ -1,5 +1,7 @@
 const { z } = require("zod");
 
+const { PREFIX, id_or_throw, zid } = require("../utils/ids");
+
 const {
   validate_template_placeholders,
 } = require("./agreement_template_service");
@@ -46,9 +48,7 @@ const sign_agreement_schema = z.object({
 });
 
 const list_agreements_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid(PREFIX.property, "property")
     .optional(),
 
   status: z.enum([
@@ -76,21 +76,6 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
-}
-
 module.exports = {
   validate_template: (data) =>
     validate(
@@ -114,11 +99,11 @@ module.exports = {
     ),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    id_or_throw(value, "property", PREFIX.property),
 
   validate_tenant_id: (value) =>
-    validate_id(value, "tenant"),
+    id_or_throw(value, "tenant", PREFIX.tenant),
 
   validate_agreement_id: (value) =>
-    validate_id(value, "agreement"),
+    id_or_throw(value, "agreement", PREFIX.agreement),
 };

@@ -117,7 +117,8 @@ async function request_payment({ owner_id, phone_input, plan_months = null, requ
     const sent = await mpesa.stk_push({
       phone: phone.slice(1),
       amount: invoice.amount_due,
-      account_reference: `KODI${owner_id}`,
+      // The bill number (12 characters); payments are matched by CheckoutRequestID, not by this.
+      account_reference: `KODI-B${String(invoice.invoice_number).padStart(6, "0")}`,
       description: "Kodi bill",
     });
 

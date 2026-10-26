@@ -139,21 +139,19 @@ async function list_audit_logs(filters) {
     total: Number(count_result.rows[0].total),
 
     logs: result.rows.map((row) => ({
-      id: Number(row.audit_log_id),
+      id: row.audit_log_id,
 
       action: row.action,
 
       entity_type: row.entity_type,
-      entity_id: row.entity_id
-        ? Number(row.entity_id)
-        : null,
+      entity_id: row.entity_id || null,
 
       metadata: row.metadata || null,
       ip_address: row.ip_address,
 
       actor: row.user_id
         ? {
-          user_id: Number(row.user_id),
+          user_id: row.user_id,
           full_name: full_name(
             row.actor_first_name,
             row.actor_last_name
@@ -165,7 +163,7 @@ async function list_audit_logs(filters) {
 
       account: row.owner_id
         ? {
-          owner_id: Number(row.owner_id),
+          owner_id: row.owner_id,
           full_name: full_name(
             row.account_first_name,
             row.account_last_name
@@ -333,7 +331,7 @@ async function get_overview() {
   `);
 
   const rows = owners.rows.map((row) => ({
-    user_id: Number(row.user_id),
+    user_id: row.user_id,
     name: full_name(row.first_name, row.last_name),
     phone: row.phone,
     status: row.status,
@@ -427,7 +425,7 @@ async function open_owner_account(
   });
 
   return {
-    user_id: Number(owner.user_id),
+    user_id: owner.user_id,
     name: full_name(owner.first_name, owner.last_name),
     phone: owner.phone,
     status: owner.status,

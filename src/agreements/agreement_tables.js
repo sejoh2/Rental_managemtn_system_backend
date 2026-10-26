@@ -3,9 +3,9 @@ const db = require("../config/db");
 async function init_agreement_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS agreement_templates (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('agt'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -14,7 +14,7 @@ async function init_agreement_tables() {
         A value means this template overrides the default
         for one specific property.
       */
-      property_id BIGINT
+      property_id record_id
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -50,21 +50,21 @@ async function init_agreement_tables() {
       WHERE property_id IS NULL;
 
     CREATE TABLE IF NOT EXISTS agreements (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('agr'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      unit_id BIGINT NOT NULL
+      unit_id record_id NOT NULL
         REFERENCES units(id)
         ON DELETE RESTRICT,
 
-      tenant_id BIGINT NOT NULL UNIQUE
+      tenant_id record_id NOT NULL UNIQUE
         REFERENCES tenants(id)
         ON DELETE CASCADE,
 
@@ -73,7 +73,7 @@ async function init_agreement_tables() {
         is also snapshotted below so later template edits do not
         change historical agreements.
       */
-      template_id BIGINT
+      template_id record_id
         REFERENCES agreement_templates(id)
         ON DELETE SET NULL,
 

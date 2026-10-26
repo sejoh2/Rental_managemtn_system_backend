@@ -26,7 +26,7 @@ const KEEP_DAYS = 30;
 async function init_idempotency_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS idempotency_keys (
-      user_id BIGINT NOT NULL
+      user_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 

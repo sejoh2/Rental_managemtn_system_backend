@@ -437,12 +437,12 @@ async function bill_service_charges(
           AND properties.status = 'active'
 
           AND (
-            $1::BIGINT IS NULL
+            $1::TEXT IS NULL
             OR tenants.id = $1
           )
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR service_charges.id = $2
           )
 

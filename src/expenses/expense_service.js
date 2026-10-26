@@ -41,7 +41,7 @@ function expense_recovery(expense) {
           ? "recovered"
           : "pending",
 
-    tenant_id: Number(expense.charged_tenant_id),
+    tenant_id: expense.charged_tenant_id,
     tenant_name: expense.charged_tenant_name,
     charged,
     paid,
@@ -52,10 +52,10 @@ function expense_recovery(expense) {
 
 function public_expense(expense) {
   return {
-    id: Number(expense.id),
+    id: expense.id,
 
-    owner_id: Number(expense.owner_id),
-    property_id: Number(expense.property_id),
+    owner_id: expense.owner_id,
+    property_id: expense.property_id,
 
     property_name: expense.property_name || null,
 
@@ -73,21 +73,16 @@ function public_expense(expense) {
     /*
       Set when the expense came from a maintenance request.
     */
-    maintenance_request_id: expense.maintenance_request_id
-      ? Number(expense.maintenance_request_id)
-      : null,
+    maintenance_request_id:
+      expense.maintenance_request_id || null,
 
-    unit_id: expense.unit_id
-      ? Number(expense.unit_id)
-      : null,
+    unit_id: expense.unit_id || null,
 
     unit_number: expense.unit_number || null,
 
     recovery: expense_recovery(expense),
 
-    created_by: expense.created_by
-      ? Number(expense.created_by)
-      : null,
+    created_by: expense.created_by || null,
 
     created_by_name: expense.created_by_name || null,
     created_by_role: expense.created_by_role,
@@ -99,8 +94,8 @@ function public_expense(expense) {
 
 function get_owner_id(user) {
   return user.role === "caretaker"
-    ? Number(user.owner_id)
-    : Number(user.user_id);
+    ? user.owner_id
+    : user.user_id;
 }
 
 async function ensure_property_access(
@@ -492,7 +487,7 @@ async function list_expenses(user, filters) {
       WHERE expenses.owner_id = $1
 
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR expenses.property_id = $2
         )
 
@@ -517,7 +512,7 @@ async function list_expenses(user, filters) {
         )
 
         AND (
-          $7::BIGINT IS NULL
+          $7::TEXT IS NULL
           OR EXISTS (
             SELECT 1
             FROM property_caretaker_assignments
@@ -708,7 +703,7 @@ async function get_expense_summary(
           AND expenses.status = 'recorded'
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR expenses.property_id = $2
           )
 
@@ -723,7 +718,7 @@ async function get_expense_summary(
           )
 
           AND (
-            $5::BIGINT IS NULL
+            $5::TEXT IS NULL
             OR EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
@@ -756,7 +751,7 @@ async function get_expense_summary(
           AND payments.status = 'matched'
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR payments.property_id = $2
           )
 
@@ -777,7 +772,7 @@ async function get_expense_summary(
           )
 
           AND (
-            $5::BIGINT IS NULL
+            $5::TEXT IS NULL
             OR EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
@@ -807,7 +802,7 @@ async function get_expense_summary(
         WHERE deposit_settlements.owner_id = $1
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR deposit_settlements.property_id = $2
           )
 
@@ -828,7 +823,7 @@ async function get_expense_summary(
           )
 
           AND (
-            $5::BIGINT IS NULL
+            $5::TEXT IS NULL
             OR EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
@@ -968,7 +963,7 @@ async function get_expense_reconciliation(
           AND expenses.status = 'recorded'
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR expenses.property_id = $2
           )
 
@@ -983,7 +978,7 @@ async function get_expense_reconciliation(
           )
 
           AND (
-            $5::BIGINT IS NULL
+            $5::TEXT IS NULL
             OR EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
@@ -1037,12 +1032,12 @@ async function get_expense_reconciliation(
           AND tenant_charges.status <> 'void'
 
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR tenant_charges.property_id = $2
           )
 
           AND (
-            $5::BIGINT IS NULL
+            $5::TEXT IS NULL
             OR EXISTS (
               SELECT 1
               FROM property_caretaker_assignments
