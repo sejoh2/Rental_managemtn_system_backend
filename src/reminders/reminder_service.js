@@ -60,13 +60,13 @@ async function init_reminder_tables() {
       NOT NULL DEFAULT 3;
 
     CREATE TABLE IF NOT EXISTS sms_auto_reminders (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('sar'),
 
-      tenant_id BIGINT NOT NULL
+      tenant_id record_id NOT NULL
         REFERENCES tenants(id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -493,7 +493,7 @@ async function run_payment_reminders(now = null) {
         });
 
         summary.push({
-          property_id: Number(property.id),
+          property_id: property.id,
           ...reminder,
           sent,
           failed,

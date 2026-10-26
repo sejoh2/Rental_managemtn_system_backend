@@ -22,7 +22,7 @@ async function init_subscription_tables() {
         CHECK (monthly_price BETWEEN 1 AND 1000000),
       grace_days INTEGER NOT NULL DEFAULT 7
         CHECK (grace_days BETWEEN 0 AND 30),
-      updated_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+      updated_by record_id REFERENCES users(user_id) ON DELETE SET NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -39,7 +39,7 @@ async function init_subscription_tables() {
       discount_percent NUMERIC(5, 2) NOT NULL
         CHECK (discount_percent >= 0 AND discount_percent < 100),
       enabled BOOLEAN NOT NULL DEFAULT FALSE,
-      updated_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+      updated_by record_id REFERENCES users(user_id) ON DELETE SET NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -105,7 +105,7 @@ async function init_subscription_tables() {
       the next bill.
     */
     CREATE TABLE IF NOT EXISTS subscriptions (
-      owner_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+      owner_id record_id PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
       trial_ends_on DATE NOT NULL,
       paid_through DATE,
       carry_amount INTEGER NOT NULL DEFAULT 0 CHECK (carry_amount >= 0),
@@ -128,14 +128,14 @@ async function init_subscription_tables() {
       time per landlord.
     */
     CREATE TABLE IF NOT EXISTS subscription_discounts (
-      discount_id BIGSERIAL PRIMARY KEY,
-      owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      discount_id record_id PRIMARY KEY DEFAULT new_id('dsc'),
+      owner_id record_id NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
       kind VARCHAR(10) NOT NULL CHECK (kind IN ('percent', 'amount')),
       value INTEGER NOT NULL CHECK (value > 0),
       months_total INTEGER CHECK (months_total IS NULL OR months_total BETWEEN 1 AND 36),
       months_used INTEGER NOT NULL DEFAULT 0 CHECK (months_used >= 0),
       reason TEXT NOT NULL,
-      created_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+      created_by record_id REFERENCES users(user_id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       ended_at TIMESTAMPTZ,
       CHECK (kind <> 'percent' OR value <= 100)
@@ -152,15 +152,15 @@ async function init_subscription_tables() {
       monthly bill per owner.
     */
     CREATE TABLE IF NOT EXISTS subscription_invoices (
-      invoice_id BIGSERIAL PRIMARY KEY,
-      owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      invoice_id record_id PRIMARY KEY DEFAULT new_id('inv'),
+      owner_id record_id NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
       kind VARCHAR(10) NOT NULL CHECK (kind IN ('monthly', 'prepaid')),
       period_start DATE NOT NULL,
       period_end DATE NOT NULL,
       months INTEGER NOT NULL CHECK (months >= 1),
       base_amount INTEGER NOT NULL CHECK (base_amount >= 0),
       discount_amount INTEGER NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),
-      discount_id BIGINT REFERENCES subscription_discounts(discount_id) ON DELETE SET NULL,
+      discount_id record_id REFERENCES subscription_discounts(discount_id) ON DELETE SET NULL,
       carried_amount INTEGER NOT NULL DEFAULT 0 CHECK (carried_amount >= 0),
       amount_due INTEGER NOT NULL CHECK (amount_due >= 0),
       custom_amount_reason TEXT,
@@ -179,13 +179,19 @@ async function init_subscription_tables() {
     CREATE INDEX IF NOT EXISTS idx_subscription_invoices_owner
       ON subscription_invoices(owner_id, created_at DESC);
 
+    -- The bill number people see ("bill #12"), counted on its own; never used to look a bill up.
+    CREATE SEQUENCE IF NOT EXISTS subscription_invoice_number_seq;
+    ALTER TABLE subscription_invoices
+      ADD COLUMN IF NOT EXISTS invoice_number BIGINT NOT NULL UNIQUE
+        DEFAULT nextval('subscription_invoice_number_seq');
+
     /*
       Money received. An M-Pesa receipt number counts once, ever.
     */
     CREATE TABLE IF NOT EXISTS subscription_payments (
-      payment_id BIGSERIAL PRIMARY KEY,
-      owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-      invoice_id BIGINT REFERENCES subscription_invoices(invoice_id) ON DELETE SET NULL,
+      payment_id record_id PRIMARY KEY DEFAULT new_id('spy'),
+      owner_id record_id NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      invoice_id record_id REFERENCES subscription_invoices(invoice_id) ON DELETE SET NULL,
       method VARCHAR(20) NOT NULL CHECK (method IN ('mpesa_stk', 'cash', 'bank', 'mpesa_other', 'other')),
       amount INTEGER NOT NULL CHECK (amount > 0),
       mpesa_receipt VARCHAR(20),
@@ -193,7 +199,7 @@ async function init_subscription_tables() {
       phone VARCHAR(20),
       paid_on DATE NOT NULL,
       note TEXT,
-      recorded_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+      recorded_by record_id REFERENCES users(user_id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -201,15 +207,21 @@ async function init_subscription_tables() {
       ON subscription_payments(mpesa_receipt)
       WHERE mpesa_receipt IS NOT NULL;
 
+    -- Kodi's receipt number (KODI-R-000123), counted on its own; never used to look a payment up.
+    CREATE SEQUENCE IF NOT EXISTS subscription_receipt_number_seq;
+    ALTER TABLE subscription_payments
+      ADD COLUMN IF NOT EXISTS receipt_number BIGINT NOT NULL UNIQUE
+        DEFAULT nextval('subscription_receipt_number_seq');
+
     /*
       Each STK push Kodi asked Safaricom to send. A payment is
       counted only for a request made here, with the same
       amount, once Safaricom confirms it when asked directly.
     */
     CREATE TABLE IF NOT EXISTS subscription_stk_requests (
-      stk_id BIGSERIAL PRIMARY KEY,
-      owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-      invoice_id BIGINT NOT NULL REFERENCES subscription_invoices(invoice_id) ON DELETE CASCADE,
+      stk_id record_id PRIMARY KEY DEFAULT new_id('stk'),
+      owner_id record_id NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      invoice_id record_id NOT NULL REFERENCES subscription_invoices(invoice_id) ON DELETE CASCADE,
       phone VARCHAR(20) NOT NULL,
       amount INTEGER NOT NULL CHECK (amount > 0),
       checkout_request_id VARCHAR(100),
@@ -219,7 +231,7 @@ async function init_subscription_tables() {
       result_code VARCHAR(20),
       result_desc TEXT,
       mpesa_receipt VARCHAR(20),
-      requested_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+      requested_by record_id REFERENCES users(user_id) ON DELETE SET NULL,
       automatic BOOLEAN NOT NULL DEFAULT FALSE,
       checks INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -248,7 +260,7 @@ async function init_subscription_tables() {
 
     -- What Safaricom sent to the result address, as received.
     CREATE TABLE IF NOT EXISTS subscription_stk_events (
-      event_id BIGSERIAL PRIMARY KEY,
+      event_id record_id PRIMARY KEY DEFAULT new_id('ste'),
       checkout_request_id VARCHAR(100),
       payload JSONB NOT NULL,
       ip_address VARCHAR(100),
@@ -257,7 +269,7 @@ async function init_subscription_tables() {
 
     -- Reminders already sent, so each goes once.
     CREATE TABLE IF NOT EXISTS subscription_notices (
-      owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      owner_id record_id NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
       notice_key VARCHAR(100) NOT NULL,
       sent_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (owner_id, notice_key)

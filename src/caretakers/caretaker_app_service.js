@@ -61,7 +61,7 @@ async function list_my_properties(caretaker) {
   );
 
   return result.rows.map((row) => ({
-    id: Number(row.id),
+    id: row.id,
     name: row.name,
     location: row.location,
     rent_due_day: row.rent_due_day,
@@ -130,7 +130,7 @@ async function set_payment_permission(
     entity_type: "caretaker_assignment",
     entity_id: assignment.id,
     metadata: {
-      caretaker_id: Number(assignment.caretaker_id),
+      caretaker_id: assignment.caretaker_id,
       property_id,
       can_record_payments: assignment.can_record_payments,
     },
@@ -138,9 +138,9 @@ async function set_payment_permission(
   });
 
   return {
-    assignment_id: Number(assignment.id),
+    assignment_id: assignment.id,
     property_id,
-    caretaker_id: Number(assignment.caretaker_id),
+    caretaker_id: assignment.caretaker_id,
     can_record_payments: assignment.can_record_payments,
   };
 }

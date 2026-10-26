@@ -50,7 +50,7 @@ function permission_label(row) {
 
 function public_caretaker(row) {
   return {
-    caretaker_id: Number(row.caretaker_id),
+    caretaker_id: row.caretaker_id,
 
     first_name: row.first_name,
     last_name: row.last_name,
@@ -62,10 +62,10 @@ function public_caretaker(row) {
 
     phone: row.phone,
 
-    property_id: Number(row.property_id),
+    property_id: row.property_id,
     property_name: row.property_name || null,
 
-    assignment_id: Number(row.assignment_id),
+    assignment_id: row.assignment_id,
 
     permission_level: row.permission_level,
     permissions: caretaker_permissions(row),
@@ -210,7 +210,7 @@ async function assign_caretaker(
 
     const is_own_caretaker =
       user.role === "caretaker" &&
-      Number(user.owner_id) === Number(owner.user_id);
+      user.owner_id === owner.user_id;
 
     /*
       Removing a caretaker from their last property makes the
@@ -234,8 +234,8 @@ async function assign_caretaker(
       user.role !== "user" &&
       !(
         user.role === "caretaker" &&
-        Number(user.owner_id) ===
-          Number(owner.user_id)
+        user.owner_id ===
+          owner.user_id
       )
     ) {
       const error = new Error(
@@ -507,7 +507,7 @@ async function get_caretaker(owner, caretaker_id) {
 
     return {
       caretaker: {
-        caretaker_id: Number(caretaker.user_id),
+        caretaker_id: caretaker.user_id,
         first_name: caretaker.first_name,
         last_name: caretaker.last_name,
         full_name: [
@@ -520,10 +520,8 @@ async function get_caretaker(owner, caretaker_id) {
 
       assignments: assignments_result.rows.map(
         (assignment) => ({
-          assignment_id: Number(assignment.id),
-          property_id: Number(
-            assignment.property_id
-          ),
+          assignment_id: assignment.id,
+          property_id: assignment.property_id,
           property_name: assignment.property_name,
           permission_level:
             assignment.permission_level,

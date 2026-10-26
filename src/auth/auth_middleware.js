@@ -17,6 +17,10 @@ const {
   write_refusal,
 } = require("../subscriptions/subscription_access");
 
+const {
+  is_id,
+} = require("../utils/ids");
+
 /*
   The admin's own pages. The acting-owner header is ignored
   here, so the admin stays an admin on them.
@@ -48,7 +52,10 @@ async function authenticate(req, res, next) {
       signing out, or an administrator ending it, takes effect
       on the next request rather than when the token runs out.
     */
-    if (!decoded.sid) {
+    if (
+      !is_id(decoded.sid, "ses") ||
+      !is_id(decoded.user_id, "usr")
+    ) {
       throw new Error("Invalid token.");
     }
 
@@ -111,9 +118,11 @@ async function authenticate(req, res, next) {
       works unchanged, while the audit log records the admin
       as the person who acted.
     */
-    const acting_owner_id = Number(
-      req.headers["x-acting-owner-id"]
-    );
+    const acting_header = req.headers["x-acting-owner-id"];
+
+    const acting_owner_id = is_id(acting_header, "usr")
+      ? acting_header
+      : null;
 
     if (
       user.role === "admin" &&

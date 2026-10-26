@@ -3,6 +3,10 @@ const jwt = require("jsonwebtoken");
 
 const db = require("../config/db");
 
+const {
+  is_id,
+} = require("../utils/ids");
+
 /*
   An account created by OTP is called "New User" until the
   person gives their own name.
@@ -131,14 +135,7 @@ function expiry_of(token) {
 */
 async function issue_tokens(user) {
   const id_result = await db.query(
-    `
-      SELECT nextval(
-        pg_get_serial_sequence(
-          'refresh_tokens',
-          'refresh_token_id'
-        )
-      ) AS id
-    `
+    `SELECT new_id('ses') AS id`
   );
 
   const session_id = id_result.rows[0].id;
@@ -276,7 +273,11 @@ function verify_live_ticket(ticket) {
     verify_options()
   );
 
-  if (decoded.type !== "live" || !decoded.sid) {
+  if (
+    decoded.type !== "live" ||
+    !is_id(decoded.sid, "ses") ||
+    !is_id(decoded.user_id, "usr")
+  ) {
     throw new Error("Not a live connection pass.");
   }
 

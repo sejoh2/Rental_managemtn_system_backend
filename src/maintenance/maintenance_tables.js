@@ -3,13 +3,13 @@ const db = require("../config/db");
 async function init_maintenance_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS maintenance_requests (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('mnt'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -17,7 +17,7 @@ async function init_maintenance_tables() {
         NULL means a common-area issue:
         gate, compound, drainage, corridor, etc.
       */
-      unit_id BIGINT
+      unit_id record_id
         REFERENCES units(id)
         ON DELETE SET NULL,
 
@@ -58,7 +58,7 @@ async function init_maintenance_tables() {
           )
         ),
 
-      reported_by BIGINT NOT NULL
+      reported_by record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE RESTRICT,
 
@@ -67,7 +67,7 @@ async function init_maintenance_tables() {
           reporter_role IN ('owner', 'caretaker')
         ),
 
-      assigned_caretaker_id BIGINT
+      assigned_caretaker_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -150,17 +150,17 @@ async function init_maintenance_tables() {
       NOT NULL DEFAULT FALSE;
 
     ALTER TABLE maintenance_requests
-      ADD COLUMN IF NOT EXISTS expense_id BIGINT
+      ADD COLUMN IF NOT EXISTS expense_id record_id
       REFERENCES expenses(id)
       ON DELETE SET NULL;
 
     ALTER TABLE maintenance_requests
-      ADD COLUMN IF NOT EXISTS tenant_charge_id BIGINT
+      ADD COLUMN IF NOT EXISTS tenant_charge_id record_id
       REFERENCES tenant_charges(id)
       ON DELETE SET NULL;
 
     ALTER TABLE maintenance_requests
-      ADD COLUMN IF NOT EXISTS charged_tenant_id BIGINT
+      ADD COLUMN IF NOT EXISTS charged_tenant_id record_id
       REFERENCES tenants(id)
       ON DELETE SET NULL;
 

@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const categories = [
   "repairs_maintenance",
@@ -34,9 +35,7 @@ const create_expense_schema = z.object({
     The unit the cost was for. Leave it out, or send null, for
     a cost of the whole property.
   */
-  unit_id: z.coerce.number()
-    .int()
-    .positive()
+  unit_id: zid("unt", "unit")
     .nullable()
     .optional(),
 });
@@ -51,9 +50,7 @@ const update_expense_schema = create_expense_schema
   );
 
 const list_expenses_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 
   category: z.enum(categories)
@@ -99,19 +96,8 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -144,8 +130,8 @@ module.exports = {
     ),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    validate_id(value, "property", "prp"),
 
   validate_expense_id: (value) =>
-    validate_id(value, "expense"),
+    validate_id(value, "expense", "exp"),
 };

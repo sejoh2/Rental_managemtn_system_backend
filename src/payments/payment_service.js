@@ -24,19 +24,13 @@ const {
 
 function public_payment(payment) {
   return {
-    id: Number(payment.id),
+    id: payment.id,
 
-    property_id: payment.property_id
-      ? Number(payment.property_id)
-      : null,
+    property_id: payment.property_id || null,
 
-    unit_id: payment.unit_id
-      ? Number(payment.unit_id)
-      : null,
+    unit_id: payment.unit_id || null,
 
-    tenant_id: payment.tenant_id
-      ? Number(payment.tenant_id)
-      : null,
+    tenant_id: payment.tenant_id || null,
 
     tenant_name: payment.tenant_name || null,
     unit_number: payment.unit_number || null,
@@ -1022,7 +1016,7 @@ async function list_payments(owner, filters = {}) {
       WHERE payments.owner_id = $1
 
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR payments.property_id = $2
         )
 
@@ -1079,7 +1073,7 @@ async function list_payments(owner, filters = {}) {
       INNER JOIN tenant_charges
         ON tenant_charges.id =
           payment_allocations.tenant_charge_id
-      WHERE payment_allocations.payment_id = ANY($1::BIGINT[])
+      WHERE payment_allocations.payment_id = ANY($1::record_id[])
       ORDER BY payment_allocations.id
     `,
     [result.rows.map((payment) => payment.id)]
@@ -1252,7 +1246,7 @@ async function list_tenant_payments(owner, tenant_id) {
       INNER JOIN tenant_charges
         ON tenant_charges.id =
           payment_allocations.tenant_charge_id
-      WHERE payment_allocations.payment_id = ANY($1::BIGINT[])
+      WHERE payment_allocations.payment_id = ANY($1::record_id[])
       ORDER BY payment_allocations.id
     `,
     [result.rows.map((payment) => payment.id)]

@@ -5,6 +5,7 @@ const { rateLimit } = require("express-rate-limit");
 const agent_data_service = require("./agent_data_service");
 const { authenticate_agent } = require("./agent_data_auth");
 const { log_audit } = require("../audit/audit_service");
+const { PREFIX, zid } = require("../utils/ids");
 
 /*
   The agent data API: read-only figures for the customer agent's
@@ -52,7 +53,7 @@ const landlords_schema = z
   })
   .strict();
 
-const landlord_schema = z.object({ landlord_id: z.coerce.number().int().positive() });
+const landlord_schema = z.object({ landlord_id: zid(PREFIX.user, "landlord") });
 
 async function record_read(req, what, details) {
   await log_audit({

@@ -12,10 +12,10 @@ const {
 
 function public_service_charge(charge) {
   return {
-    id: Number(charge.id),
+    id: charge.id,
 
-    owner_id: Number(charge.owner_id),
-    property_id: Number(charge.property_id),
+    owner_id: charge.owner_id,
+    property_id: charge.property_id,
 
     name: charge.name,
     category: charge.category,
@@ -32,7 +32,7 @@ function public_service_charge(charge) {
     */
     unit_amounts: (charge.unit_amounts || []).map(
       (unit) => ({
-        unit_id: Number(unit.unit_id),
+        unit_id: unit.unit_id,
         unit_number: unit.unit_number,
         amount: Number(unit.amount),
         custom: unit.custom,
@@ -97,12 +97,12 @@ async function fetch_service_charges(
         AND service_charges.status = 'active'
 
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR service_charges.property_id = $2
         )
 
         AND (
-          $3::BIGINT IS NULL
+          $3::TEXT IS NULL
           OR service_charges.id = $3
         )
 
@@ -210,11 +210,11 @@ async function save_unit_amounts(
         amount
       )
       SELECT
-        $1::BIGINT,
+        $1::record_id,
         items.unit_id,
         items.amount
       FROM JSON_TO_RECORDSET($2::JSON)
-        AS items (unit_id BIGINT, amount NUMERIC)
+        AS items (unit_id TEXT, amount NUMERIC)
       WHERE items.amount <> $3::NUMERIC
       ON CONFLICT (service_charge_id, unit_id)
       DO UPDATE SET amount = EXCLUDED.amount

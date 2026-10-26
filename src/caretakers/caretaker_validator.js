@@ -1,5 +1,7 @@
 const { z } = require("zod");
 
+const { PREFIX, id_or_throw } = require("../utils/ids");
+
 const permission_levels = [
   "level_1",
   "level_2",
@@ -123,21 +125,6 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
-}
-
 module.exports = {
   validate_update_caretaker_details: (data) =>
     validate(
@@ -161,8 +148,9 @@ module.exports = {
     ),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    id_or_throw(value, "property", PREFIX.property),
 
+  // A caretaker is a user.
   validate_caretaker_id: (value) =>
-    validate_id(value, "caretaker"),
+    id_or_throw(value, "caretaker", PREFIX.user),
 };

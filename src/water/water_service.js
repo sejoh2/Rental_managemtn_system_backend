@@ -34,13 +34,11 @@ function first_day_of_month(value) {
 
 function public_reading(reading) {
   return {
-    id: Number(reading.id),
-    owner_id: Number(reading.owner_id),
-    property_id: Number(reading.property_id),
-    unit_id: Number(reading.unit_id),
-    tenant_id: reading.tenant_id
-      ? Number(reading.tenant_id)
-      : null,
+    id: reading.id,
+    owner_id: reading.owner_id,
+    property_id: reading.property_id,
+    unit_id: reading.unit_id,
+    tenant_id: reading.tenant_id || null,
 
     tenant_name: reading.tenant_name || null,
     unit_number: reading.unit_number || null,
@@ -82,9 +80,7 @@ function public_reading(reading) {
     status: reading.status,
     flag_reason: reading.flag_reason,
 
-    tenant_charge_id: reading.tenant_charge_id
-      ? Number(reading.tenant_charge_id)
-      : null,
+    tenant_charge_id: reading.tenant_charge_id || null,
 
     /*
       Whether the bill this reading produced has been paid:
@@ -171,7 +167,7 @@ async function ensure_property_access(
 
   return {
     property,
-    owner_id: Number(owner_id),
+    owner_id,
   };
 }
 
@@ -225,9 +221,10 @@ function calculate_due_date(property, billing_period) {
 }
 
 /*
-  A tenant normally has one water bill a month. additional is
-  for a final reading: the tenant is billed again, separately,
-  for the units used since their earlier reading that month.
+  A tenant normally has one water bill a month. final_reading_id
+  is for a final reading: the tenant is billed again, separately,
+  for the units used since their earlier reading that month, and
+  that bill belongs to the final reading.
 */
 async function create_water_charge(
   client,
@@ -236,7 +233,7 @@ async function create_water_charge(
     property,
     billing_period,
     amount,
-    additional = false,
+    final_reading_id = null,
   }
 ) {
   const result = await client.query(
@@ -256,18 +253,9 @@ async function create_water_charge(
       VALUES (
         $1,$2,$3,$4,
         'water',$5,$6,$7,
+        COALESCE($8::TEXT, ''),
         CASE
-          WHEN $8::BOOLEAN THEN (
-            SELECT COALESCE(MAX(source_id), 0) + 1
-            FROM tenant_charges
-            WHERE tenant_id = $1
-              AND charge_type = 'water'
-              AND billing_period = $5::DATE
-          )
-          ELSE 0
-        END,
-        CASE
-          WHEN $8::BOOLEAN THEN 'Water, final reading'
+          WHEN $8::TEXT IS NOT NULL THEN 'Water, final reading'
         END
       )
       ON CONFLICT (
@@ -295,7 +283,7 @@ async function create_water_charge(
         billing_period
       ),
       amount,
-      additional,
+      final_reading_id,
     ]
   );
 
@@ -400,7 +388,7 @@ async function update_water_rules(
     });
 
     return {
-      property_id: Number(property.id),
+      property_id: property.id,
       water_billing_method:
         property.water_billing_method,
       water_rate_per_unit: Number(
@@ -749,11 +737,9 @@ async function edit_meter_reading(
       entity_type: "water_meter_reading",
       entity_id: reading.id,
       metadata: {
-        property_id: Number(reading.property_id),
-        unit_id: Number(reading.unit_id),
-        tenant_id: reading.tenant_id
-          ? Number(reading.tenant_id)
-          : null,
+        property_id: reading.property_id,
+        unit_id: reading.unit_id,
+        tenant_id: reading.tenant_id || null,
         billing_period: reading.billing_period_text,
         was: {
           previous_reading: Number(reading.previous_reading),
@@ -947,18 +933,14 @@ async function cancel_meter_reading(
       entity_type: "water_meter_reading",
       entity_id: reading.id,
       metadata: {
-        property_id: Number(reading.property_id),
-        unit_id: Number(reading.unit_id),
-        tenant_id: reading.tenant_id
-          ? Number(reading.tenant_id)
-          : null,
+        property_id: reading.property_id,
+        unit_id: reading.unit_id,
+        tenant_id: reading.tenant_id || null,
         billing_period: reading.billing_period_text,
         previous_reading: Number(reading.previous_reading),
         current_reading: Number(reading.current_reading),
         bill_amount: Number(reading.bill_amount),
-        tenant_charge_id: reading.tenant_charge_id
-          ? Number(reading.tenant_charge_id)
-          : null,
+        tenant_charge_id: reading.tenant_charge_id || null,
         returned_as_credit: credit_returned,
         reason: data.reason,
       },
@@ -966,7 +948,7 @@ async function cancel_meter_reading(
     });
 
     return {
-      id: Number(reading.id),
+      id: reading.id,
       status: "rejected",
       returned_as_credit: credit_returned,
     };
@@ -1231,6 +1213,16 @@ async function submit_meter_reading(
         (units_used * rate_per_unit).toFixed(2)
       );
 
+    /*
+      The reading's ID is made first: a final reading's bill
+      belongs to it.
+    */
+    const new_reading = await client.query(
+      "SELECT new_id('wrd') AS id"
+    );
+
+    const new_reading_id = new_reading.rows[0].id;
+
     let charge = null;
 
     if (!suspicious) {
@@ -1246,7 +1238,9 @@ async function submit_meter_reading(
           property,
           billing_period,
           amount: bill_amount,
-          additional: data.final_reading,
+          final_reading_id: data.final_reading
+            ? new_reading_id
+            : null,
         }
       );
 
@@ -1282,6 +1276,7 @@ async function submit_meter_reading(
     const reading_result = await client.query(
       `
         INSERT INTO water_meter_readings (
+          id,
           owner_id,
           property_id,
           unit_id,
@@ -1302,7 +1297,7 @@ async function submit_meter_reading(
           is_final
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,
+          $19,$1,$2,$3,$4,$5,$6,
           $7,$8,$9,$10,$11,
           $12,$13,$14,$15,$16,$17,
           $18
@@ -1330,6 +1325,7 @@ async function submit_meter_reading(
         charge?.id || null,
         owner.user_id,
         Boolean(data.final_reading),
+        new_reading_id,
       ]
     );
 
@@ -1387,7 +1383,7 @@ async function submit_meter_reading(
             except_user_id: owner.user_id,
             title: "A reading needs fixing",
             body: `House ${unit.unit_number}: ${current_reading} is lower than the last reading (${previous_reading}).`,
-            data: { type: "reading", reading_id: String(reading.id) },
+            data: { type: "reading", reading_id: reading.id },
           })
           .catch((error) => console.error("[PUSH] Reading notification failed:", error.message));
       }
@@ -1574,7 +1570,9 @@ async function review_meter_reading(
         */
         billing_period: reading.billing_period_text,
         amount: bill_amount,
-        additional: Boolean(reading.is_final),
+        final_reading_id: reading.is_final
+          ? reading.id
+          : null,
       }
     );
 
@@ -1696,7 +1694,7 @@ async function generate_fixed_monthly_bills(
 
       if (!Number.isFinite(amount) || amount <= 0) {
         skipped.push({
-          tenant_id: Number(tenant.id),
+          tenant_id: tenant.id,
           unit_number: tenant.unit_number,
           reason:
             "Unit has no valid fixed monthly water amount.",
@@ -1717,14 +1715,14 @@ async function generate_fixed_monthly_bills(
 
       if (charge) {
         created.push({
-          tenant_id: Number(tenant.id),
+          tenant_id: tenant.id,
           unit_number: tenant.unit_number,
-          tenant_charge_id: Number(charge.id),
+          tenant_charge_id: charge.id,
           amount: Number(charge.amount_due),
         });
       } else {
         skipped.push({
-          tenant_id: Number(tenant.id),
+          tenant_id: tenant.id,
           unit_number: tenant.unit_number,
           reason:
             "Water bill already exists for this billing period.",

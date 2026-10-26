@@ -7,7 +7,7 @@ const {
 async function init_auth_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
-      user_id BIGSERIAL PRIMARY KEY,
+      user_id record_id PRIMARY KEY DEFAULT new_id('usr'),
 
       first_name VARCHAR(100) NOT NULL DEFAULT 'New',
       last_name VARCHAR(100) NOT NULL DEFAULT 'User',
@@ -20,11 +20,11 @@ async function init_auth_tables() {
       status VARCHAR(30) NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'inactive', 'suspended')),
 
-      owner_id BIGINT
+      owner_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
-      created_by BIGINT
+      created_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -43,9 +43,9 @@ async function init_auth_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS otp_codes (
-      otp_code_id BIGSERIAL PRIMARY KEY,
+      otp_code_id record_id PRIMARY KEY DEFAULT new_id('otp'),
 
-      user_id BIGINT
+      user_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -66,9 +66,9 @@ async function init_auth_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS refresh_tokens (
-      refresh_token_id BIGSERIAL PRIMARY KEY,
+      refresh_token_id record_id PRIMARY KEY DEFAULT new_id('ses'),
 
-      user_id BIGINT NOT NULL
+      user_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -81,16 +81,16 @@ async function init_auth_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS audit_logs (
-      audit_log_id BIGSERIAL PRIMARY KEY,
+      audit_log_id record_id PRIMARY KEY DEFAULT new_id('aud'),
 
-      user_id BIGINT
+      user_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
       action VARCHAR(100) NOT NULL,
 
       entity_type VARCHAR(100),
-      entity_id BIGINT,
+      entity_id record_id,
 
       metadata JSONB,
       ip_address VARCHAR(100),
@@ -149,7 +149,7 @@ async function init_auth_tables() {
   */
   await db.query(`
     ALTER TABLE audit_logs
-      ADD COLUMN IF NOT EXISTS owner_id BIGINT
+      ADD COLUMN IF NOT EXISTS owner_id record_id
       REFERENCES users(user_id)
       ON DELETE SET NULL;
 

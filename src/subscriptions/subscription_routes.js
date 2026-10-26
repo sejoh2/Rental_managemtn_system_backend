@@ -21,6 +21,7 @@ const payments = require("./subscription_payment_service");
 const mpesa = require("./subscription_mpesa");
 const { build_receipt, receipt_number } = require("./subscription_receipt");
 const { callback_ip_allowed } = require("../payments/mpesa/c2b_callback_security");
+const { PREFIX, id_or_throw } = require("../utils/ids");
 
 /*
   The landlord's Billing tab (owners only; caretakers see the
@@ -42,8 +43,6 @@ function parse(schema, data, message = "Invalid request data.") {
 
   return result.data;
 }
-
-const id_param = z.coerce.number().int().positive();
 
 function respond(handler, status = 200) {
   return async (req, res, next) => {
@@ -177,7 +176,7 @@ router.post(
 router.get(
   "/payment-requests/:stk_id",
   owner_guard,
-  respond((req) => payments.payment_request_status(req.user.user_id, parse(id_param, req.params.stk_id)))
+  respond((req) => payments.payment_request_status(req.user.user_id, id_or_throw(req.params.stk_id, "payment request", PREFIX.subscription_stk_request)))
 );
 
 /*
@@ -187,7 +186,7 @@ router.get(
 async function send_receipt(res, payment_id, owner_id = null) {
   const payment = await subscriptions.get_payment(payment_id);
 
-  if (!payment || (owner_id && String(payment.owner_id) !== String(owner_id))) {
+  if (!payment || (owner_id && payment.owner_id !== owner_id)) {
     return res.status(404).json({ success: false, error: "Receipt not found." });
   }
 
@@ -206,7 +205,7 @@ async function send_receipt(res, payment_id, owner_id = null) {
 
 router.get("/receipts/:payment_id", owner_guard, async (req, res, next) => {
   try {
-    return await send_receipt(res, parse(id_param, req.params.payment_id), req.user.user_id);
+    return await send_receipt(res, id_or_throw(req.params.payment_id, "payment", PREFIX.subscription_payment), req.user.user_id);
   } catch (error) {
     return next(error);
   }

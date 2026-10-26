@@ -90,7 +90,7 @@ async function get_rent_by_month(values) {
           AND payments.status = 'matched'
           AND tenant_charges.charge_type = 'rent'
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR payments.property_id = $2
           )
 
@@ -117,7 +117,7 @@ async function get_rent_by_month(values) {
         WHERE deposit_settlements.owner_id = $1
           AND tenant_charges.charge_type = 'rent'
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR deposit_settlements.property_id = $2
           )
       )
@@ -188,7 +188,7 @@ async function get_home(owner, filters) {
         AND tenants.status IN ('active', 'notice_given')
         AND properties.status <> 'archived'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR tenant_charges.property_id = $2
         )
     `,
@@ -221,7 +221,7 @@ async function get_home(owner, filters) {
         AND properties.status <> 'archived'
         AND units.status <> 'inactive'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR units.property_id = $2
         )
     `,
@@ -246,7 +246,7 @@ async function get_home(owner, filters) {
       WHERE owner_id = $1
         AND status = 'unmatched'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR property_id = $2
         )
 
@@ -270,7 +270,7 @@ async function get_home(owner, filters) {
             AND charge_type = 'water'
             AND status <> 'void'
             AND billing_period = ${this_month_sql}
-            AND ($2::BIGINT IS NULL OR property_id = $2)
+            AND ($2::TEXT IS NULL OR property_id = $2)
         ) AS billed,
 
         (
@@ -280,7 +280,7 @@ async function get_home(owner, filters) {
             AND charge_type = 'water'
             AND status <> 'void'
             AND billing_period = ${this_month_sql}
-            AND ($2::BIGINT IS NULL OR property_id = $2)
+            AND ($2::TEXT IS NULL OR property_id = $2)
         ) AS collected,
 
         (
@@ -289,7 +289,7 @@ async function get_home(owner, filters) {
           WHERE owner_id = $1
             AND status = 'submitted'
             AND billing_period = ${this_month_sql}
-            AND ($2::BIGINT IS NULL OR property_id = $2)
+            AND ($2::TEXT IS NULL OR property_id = $2)
         ) AS units_used,
 
         (
@@ -302,7 +302,7 @@ async function get_home(owner, filters) {
             AND units.status = 'occupied'
             AND units.water_billing_method =
               'per_unit_metered'
-            AND ($2::BIGINT IS NULL OR units.property_id = $2)
+            AND ($2::TEXT IS NULL OR units.property_id = $2)
             AND NOT EXISTS (
               SELECT 1
               FROM water_meter_readings
@@ -340,7 +340,7 @@ async function get_home(owner, filters) {
           ON units.id = payments.unit_id
         WHERE payments.owner_id = $1
           AND payments.status = 'matched'
-          AND ($2::BIGINT IS NULL OR payments.property_id = $2)
+          AND ($2::TEXT IS NULL OR payments.property_id = $2)
 
         UNION ALL
 
@@ -373,7 +373,7 @@ async function get_home(owner, filters) {
         WHERE water_meter_readings.owner_id = $1
           AND water_meter_readings.status <> 'rejected'
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR water_meter_readings.property_id = $2
           )
 
@@ -398,7 +398,7 @@ async function get_home(owner, filters) {
           ON units.id = maintenance_requests.unit_id
         WHERE maintenance_requests.owner_id = $1
           AND (
-            $2::BIGINT IS NULL
+            $2::TEXT IS NULL
             OR maintenance_requests.property_id = $2
           )
 
@@ -418,7 +418,7 @@ async function get_home(owner, filters) {
         INNER JOIN units
           ON units.id = tenants.unit_id
         WHERE tenants.owner_id = $1
-          AND ($2::BIGINT IS NULL OR tenants.property_id = $2)
+          AND ($2::TEXT IS NULL OR tenants.property_id = $2)
       ) AS events
 
       ORDER BY happened_at DESC
@@ -489,7 +489,7 @@ async function get_home(owner, filters) {
       count: Number(unmatched.rows[0]?.total || 0),
 
       latest: unmatched.rows.map((row) => ({
-        id: Number(row.id),
+        id: row.id,
         amount: as_number(row.amount),
         payment_method: row.payment_method,
         payer_phone: row.payer_phone,
@@ -685,7 +685,7 @@ async function search(owner, text) {
 
   return {
     tenants: tenants.rows.map((row) => ({
-      id: Number(row.id),
+      id: row.id,
       full_name: row.full_name,
       phone: row.payment_phone,
       status: row.status,
@@ -694,7 +694,7 @@ async function search(owner, text) {
     })),
 
     payments: payments.rows.map((row) => ({
-      id: Number(row.id),
+      id: row.id,
       amount: as_number(row.amount),
       status: row.status,
       received_at: row.received_at,

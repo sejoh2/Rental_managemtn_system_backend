@@ -9,17 +9,17 @@ async function init_deposit_tables() {
       One per tenant. It is final once confirmed.
     */
     CREATE TABLE IF NOT EXISTS deposit_settlements (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('dst'),
 
-      tenant_id BIGINT NOT NULL UNIQUE
+      tenant_id record_id NOT NULL UNIQUE
         REFERENCES tenants(id)
         ON DELETE CASCADE,
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -36,7 +36,7 @@ async function init_deposit_tables() {
       */
       breakdown JSONB NOT NULL DEFAULT '{}'::JSONB,
 
-      confirmed_by BIGINT
+      confirmed_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -58,7 +58,7 @@ async function init_deposit_tables() {
           )
         ),
       refund_reference VARCHAR(200),
-      refund_recorded_by BIGINT
+      refund_recorded_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
       refund_recorded_at TIMESTAMPTZ,
@@ -72,13 +72,13 @@ async function init_deposit_tables() {
       bills. This is when that money becomes income.
     */
     CREATE TABLE IF NOT EXISTS deposit_applications (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('dap'),
 
-      settlement_id BIGINT NOT NULL
+      settlement_id record_id NOT NULL
         REFERENCES deposit_settlements(id)
         ON DELETE CASCADE,
 
-      tenant_charge_id BIGINT NOT NULL
+      tenant_charge_id record_id NOT NULL
         REFERENCES tenant_charges(id)
         ON DELETE RESTRICT,
 

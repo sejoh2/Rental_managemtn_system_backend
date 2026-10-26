@@ -1,9 +1,8 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const match_payment_schema = z.object({
-  tenant_id: z.coerce.number()
-    .int()
-    .positive(),
+  tenant_id: zid("tnt", "tenant"),
 
   /*
     If true, the payer number becomes the tenant's
@@ -49,9 +48,7 @@ const manual_payment_schema = z.object({
 });
 
 const export_payments_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 
   status: z.enum([
@@ -77,9 +74,7 @@ const reverse_payment_schema = z.object({
 });
 
 const sandbox_simulation_schema = z.object({
-  payment_account_id: z.coerce.number()
-    .int()
-    .positive(),
+  payment_account_id: zid("pac", "payment account"),
 
   phone: z.string()
     .trim()
@@ -113,19 +108,8 @@ function validate(schema, data) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -145,8 +129,8 @@ module.exports = {
     validate(sandbox_simulation_schema, data),
 
   validate_payment_id: (value) =>
-    validate_id(value, "payment"),
+    validate_id(value, "payment", "pay"),
 
   validate_tenant_id: (value) =>
-    validate_id(value, "tenant"),
+    validate_id(value, "tenant", "tnt"),
 };

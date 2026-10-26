@@ -3,9 +3,9 @@ const db = require("../config/db");
 async function init_unit_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS units (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('unt'),
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 

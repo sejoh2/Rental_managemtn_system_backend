@@ -21,8 +21,9 @@ const SOFT = "#6B635B";
 
 const money = (amount) => `KSh ${Number(amount).toLocaleString("en-KE")}`;
 
+// Kodi's running receipt number, not the payment's ID.
 function receipt_number(payment) {
-  return `KODI-R-${String(payment.payment_id).padStart(6, "0")}`;
+  return `KODI-R-${String(payment.receipt_number).padStart(6, "0")}`;
 }
 
 function build_receipt({ payment, invoice, owner }) {

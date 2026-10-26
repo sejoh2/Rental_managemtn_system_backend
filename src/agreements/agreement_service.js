@@ -15,11 +15,9 @@ function public_template(template) {
   }
 
   return {
-    id: Number(template.id),
-    owner_id: Number(template.owner_id),
-    property_id: template.property_id
-      ? Number(template.property_id)
-      : null,
+    id: template.id,
+    owner_id: template.owner_id,
+    property_id: template.property_id || null,
     name: template.name,
     content: template.content,
     notice_period_days: Number(
@@ -33,19 +31,17 @@ function public_template(template) {
 
 function public_agreement(agreement) {
   return {
-    id: Number(agreement.id),
-    owner_id: Number(agreement.owner_id),
-    property_id: Number(agreement.property_id),
-    unit_id: Number(agreement.unit_id),
-    tenant_id: Number(agreement.tenant_id),
+    id: agreement.id,
+    owner_id: agreement.owner_id,
+    property_id: agreement.property_id,
+    unit_id: agreement.unit_id,
+    tenant_id: agreement.tenant_id,
 
     tenant_name: agreement.tenant_name || null,
     property_name: agreement.property_name || null,
     unit_number: agreement.unit_number || null,
 
-    template_id: agreement.template_id
-      ? Number(agreement.template_id)
-      : null,
+    template_id: agreement.template_id || null,
 
     template_name: agreement.template_name,
     template_version: Number(
@@ -760,7 +756,7 @@ async function list_agreements(owner, filters) {
         ON units.id = agreements.unit_id
       WHERE agreements.owner_id = $1
         AND (
-          $2::BIGINT IS NULL
+          $2::record_id IS NULL
           OR agreements.property_id = $2
         )
         AND (

@@ -8,6 +8,8 @@ const {
 
 const storage = require("../utils/object_storage");
 
+const { PREFIX, is_id } = require("../utils/ids");
+
 /*
   Files an owner attaches to a record: a tenant's documents,
   an expense's receipt, a water reading's meter photo.
@@ -20,14 +22,17 @@ const kinds = {
   tenant_document: {
     table: "tenants",
     label: "tenant",
+    prefix: PREFIX.tenant,
   },
   expense_receipt: {
     table: "expenses",
     label: "expense",
+    prefix: PREFIX.expense,
   },
   meter_photo: {
     table: "water_meter_readings",
     label: "water reading",
+    prefix: PREFIX.water_reading,
   },
 };
 
@@ -75,13 +80,13 @@ function service_error(message, status_code = 400) {
 async function init_file_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS files (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('fil'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT
+      property_id record_id
         REFERENCES properties(id)
         ON DELETE SET NULL,
 
@@ -97,7 +102,7 @@ async function init_file_tables() {
       /*
         The tenant, expense or water reading it belongs to.
       */
-      target_id BIGINT NOT NULL,
+      target_id record_id NOT NULL,
 
       original_name VARCHAR(255) NOT NULL,
       label VARCHAR(120),
@@ -106,7 +111,7 @@ async function init_file_tables() {
 
       storage_key VARCHAR(500) NOT NULL UNIQUE,
 
-      uploaded_by BIGINT
+      uploaded_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -126,9 +131,9 @@ async function init_file_tables() {
 
 function public_file(file) {
   return {
-    id: Number(file.id),
+    id: file.id,
     kind: file.kind,
-    target_id: Number(file.target_id),
+    target_id: file.target_id,
     name: file.original_name,
     label: file.label || null,
     content_type: file.content_type,
@@ -146,6 +151,10 @@ async function get_target_or_throw(owner, kind, target_id) {
 
   if (!config) {
     throw service_error("Unknown kind of file.", 422);
+  }
+
+  if (!is_id(target_id, config.prefix)) {
+    throw service_error(`A valid ${config.label} ID is required.`, 422);
   }
 
   const result = await db.query(
@@ -226,10 +235,10 @@ async function count_files(owner, kind, target_ids) {
       FROM files
       WHERE owner_id = $1
         AND kind = $2
-        AND target_id = ANY($3::BIGINT[])
+        AND target_id = ANY($3::record_id[])
         AND deleted_at IS NULL
         AND (
-          $4::BIGINT IS NULL
+          $4::record_id IS NULL
           OR property_id IN (
             SELECT property_id
             FROM property_caretaker_assignments
@@ -245,7 +254,7 @@ async function count_files(owner, kind, target_ids) {
 
   return Object.fromEntries(
     result.rows.map((row) => [
-      String(row.target_id),
+      row.target_id,
       Number(row.total),
     ])
   );
@@ -388,7 +397,7 @@ async function upload_file(
         : "water_reading",
     entity_id: target_id,
     metadata: {
-      file_id: Number(file.id),
+      file_id: file.id,
       kind,
       name: file.original_name,
       label: file.label,
@@ -442,7 +451,7 @@ async function get_file_link(owner, file_id, ip_address) {
     entity_id: file.id,
     metadata: {
       kind: file.kind,
-      target_id: Number(file.target_id),
+      target_id: file.target_id,
       name: file.original_name,
     },
     ip_address,
@@ -475,7 +484,7 @@ async function delete_file(owner, file_id, ip_address) {
     entity_id: file.id,
     metadata: {
       kind: file.kind,
-      target_id: Number(file.target_id),
+      target_id: file.target_id,
       name: file.original_name,
     },
     ip_address,

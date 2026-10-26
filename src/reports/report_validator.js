@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const report_types = [
   "full_monthly_summary",
@@ -22,9 +23,7 @@ const report_formats = [
 ];
 
 const dashboard_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 
   period: z.enum(report_periods)
@@ -37,9 +36,7 @@ const export_schema = z.object({
     .optional()
     .default("full_monthly_summary"),
 
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 
   period: z.enum(report_periods)
@@ -76,19 +73,8 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -114,5 +100,5 @@ module.exports = {
     ),
 
   validate_tenant_id: (value) =>
-    validate_id(value, "tenant"),
+    validate_id(value, "tenant", "tnt"),
 };

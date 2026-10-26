@@ -20,6 +20,8 @@ const {
 const payment_service =
   require("../payments/payment_service");
 
+const { PREFIX, id_or_throw } = require("../utils/ids");
+
 async function connect_payment_account(req, res, next) {
   try {
     const { account_for, account, property_id } =
@@ -83,14 +85,7 @@ async function list_properties(req, res, next) {
 
 async function get_property(req, res, next) {
   try {
-    const property_id = Number(req.params.property_id);
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
 
     const property =
       await property_service.get_property_by_id(
@@ -116,14 +111,7 @@ async function get_property(req, res, next) {
 
 async function update_property(req, res, next) {
   try {
-    const property_id = Number(req.params.property_id);
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
 
     const data = validate_update_property(req.body);
 
@@ -147,14 +135,7 @@ async function update_property(req, res, next) {
 
 async function replace_payment_account(req, res, next) {
   try {
-    const property_id = Number(req.params.property_id);
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
 
     const { account_for, connection_id } =
       validate_replace_account({
@@ -184,14 +165,7 @@ async function replace_payment_account(req, res, next) {
 
 async function remove_payment_account(req, res, next) {
   try {
-    const property_id = Number(req.params.property_id);
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
 
     const { account_for } = validate_remove_account({
       account_for: req.params.account_for,
@@ -218,14 +192,7 @@ async function remove_payment_account(req, res, next) {
 
 async function archive_property(req, res, next) {
   try {
-    const property_id = Number(req.params.property_id);
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
 
     await property_service.archive_property(
       req.user,
@@ -248,27 +215,12 @@ async function reregister_payment_account_c2b_urls(
   next
 ) {
   try {
-    const property_id = Number(req.params.property_id);
-    const payment_account_id = Number(
-      req.params.payment_account_id
+    const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
+    const payment_account_id = id_or_throw(
+      req.params.payment_account_id,
+      "payment account",
+      PREFIX.payment_account
     );
-
-    if (!Number.isInteger(property_id) || property_id < 1) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid property ID is required.",
-      });
-    }
-
-    if (
-      !Number.isInteger(payment_account_id) ||
-      payment_account_id < 1
-    ) {
-      return res.status(422).json({
-        success: false,
-        error: "A valid payment account ID is required.",
-      });
-    }
 
     const result =
       await property_service.reregister_payment_account_c2b_urls(

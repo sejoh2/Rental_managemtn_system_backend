@@ -1,5 +1,7 @@
 const { z } = require("zod");
 
+const { PREFIX, zid } = require("../utils/ids");
+
 const move_in_billing_options = [
   "prorated",
   "full_month",
@@ -62,9 +64,7 @@ const connect_account_schema = z.object({
     Only sent when an existing property is changing this
     account, so it may keep its current business number.
   */
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid(PREFIX.property, "property")
     .optional(),
 });
 
@@ -75,7 +75,7 @@ const replace_account_schema = z.object({
     "electricity",
     "service",
   ]),
-  connection_id: z.string().uuid(),
+  connection_id: zid(PREFIX.connection_check, "connection"),
 });
 
 const create_property_schema = z.object({
@@ -143,19 +143,17 @@ const create_property_schema = z.object({
     .max(50)
     .default("carry_forward"),
 
-  rent_connection_id: z.string().uuid(),
+  rent_connection_id: zid(PREFIX.connection_check, "rent connection"),
 
   /*
     Water and electricity accounts are optional. Without one,
     those charges are paid through the rent account.
   */
-  water_connection_id: z.string()
-    .uuid()
+  water_connection_id: zid(PREFIX.connection_check, "water connection")
     .nullable()
     .optional(),
 
-  electricity_connection_id: z.string()
-    .uuid()
+  electricity_connection_id: zid(PREFIX.connection_check, "electricity connection")
     .nullable()
     .optional(),
 
@@ -163,8 +161,7 @@ const create_property_schema = z.object({
     An optional account of their own for service charges
     and repairs.
   */
-  service_connection_id: z.string()
-    .uuid()
+  service_connection_id: zid(PREFIX.connection_check, "service connection")
     .nullable()
     .optional(),
 

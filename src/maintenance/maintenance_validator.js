@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { id_or_throw, zid } = require("../utils/ids");
 
 const categories = [
   "plumbing",
@@ -31,9 +32,7 @@ const charge_timings = [
 ];
 
 const create_request_schema = z.object({
-  unit_id: z.coerce.number()
-    .int()
-    .positive()
+  unit_id: zid("unt", "unit")
     .nullable()
     .optional(),
 
@@ -73,9 +72,7 @@ const update_request_schema = z.object({
   priority: z.enum(priorities)
     .optional(),
 
-  assigned_caretaker_id: z.coerce.number()
-    .int()
-    .positive()
+  assigned_caretaker_id: zid("usr", "caretaker")
     .nullable()
     .optional(),
 
@@ -124,14 +121,10 @@ const update_request_schema = z.object({
 );
 
 const list_requests_schema = z.object({
-  property_id: z.coerce.number()
-    .int()
-    .positive()
+  property_id: zid("prp", "property")
     .optional(),
 
-  unit_id: z.coerce.number()
-    .int()
-    .positive()
+  unit_id: zid("unt", "unit")
     .optional(),
 
   status: z.enum(statuses)
@@ -160,19 +153,8 @@ function validate(schema, data, message) {
   return result.data;
 }
 
-function validate_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+function validate_id(value, label, prefix) {
+  return id_or_throw(value, label, prefix);
 }
 
 module.exports = {
@@ -198,8 +180,8 @@ module.exports = {
     ),
 
   validate_property_id: (value) =>
-    validate_id(value, "property"),
+    validate_id(value, "property", "prp"),
 
   validate_request_id: (value) =>
-    validate_id(value, "maintenance request"),
+    validate_id(value, "maintenance request", "mnt"),
 };

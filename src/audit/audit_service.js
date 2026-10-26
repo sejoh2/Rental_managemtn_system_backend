@@ -73,7 +73,7 @@ async function log_audit({
       VALUES (
         $1,$2,$3,$4,$5,$6,
         COALESCE(
-          $7::BIGINT,
+          $7::record_id,
           (
             SELECT CASE
               WHEN role = 'owner' THEN user_id
@@ -81,7 +81,7 @@ async function log_audit({
               ELSE NULL
             END
             FROM users
-            WHERE user_id = $1::BIGINT
+            WHERE user_id = $1::record_id
           )
         )
       )
