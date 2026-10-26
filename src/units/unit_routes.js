@@ -18,18 +18,15 @@ const {
 
 const db = require("../config/db");
 
-const { PREFIX, is_id } = require("../utils/ids");
+const { PREFIX, id_or_throw } = require("../utils/ids");
 
 /*
   The property of the unit in /units/:unit_id, if it is in the
   owner's account (units carry no owner of their own).
 */
 async function property_of_unit(req, owner_id) {
-  const unit_id = req.params.unit_id;
-
-  if (!is_id(unit_id, PREFIX.unit)) {
-    return null;
-  }
+  // A malformed ID is refused with 422, as it is for the owner.
+  const unit_id = id_or_throw(req.params.unit_id, "unit", PREFIX.unit);
 
   const result = await db.query(
     `
