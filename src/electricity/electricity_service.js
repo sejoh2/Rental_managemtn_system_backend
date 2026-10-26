@@ -147,12 +147,10 @@ function public_bill(row) {
     row.charge_id && row.charge_status !== "void";
 
   return {
-    unit_id: Number(row.unit_id),
+    unit_id: row.unit_id,
     unit_number: row.unit_number,
 
-    tenant_id: row.tenant_id
-      ? Number(row.tenant_id)
-      : null,
+    tenant_id: row.tenant_id || null,
 
     tenant_name: row.tenant_name || null,
 
@@ -219,7 +217,7 @@ async function save_bills(
 
     for (const bill of data.bills) {
       const row = rows.find(
-        (item) => Number(item.unit_id) === bill.unit_id
+        (item) => item.unit_id === bill.unit_id
       );
 
       if (!row) {
@@ -347,7 +345,7 @@ async function save_bills(
 
       saved.push({
         unit_number: row.unit_number,
-        tenant_id: Number(row.tenant_id),
+        tenant_id: row.tenant_id,
         previous_amount: billed
           ? Number(row.amount_due)
           : null,

@@ -32,7 +32,7 @@ function split_full_name(full_name) {
 function public_owner_settings(user, settings) {
   return {
     profile: {
-      user_id: Number(user.user_id),
+      user_id: user.user_id,
 
       first_name: user.first_name,
       last_name: user.last_name,
@@ -471,7 +471,7 @@ async function get_property_settings(
 
     caretaker: row.caretaker_id
       ? {
-        user_id: Number(row.caretaker_id),
+        user_id: row.caretaker_id,
 
         full_name: [
           row.caretaker_first_name,
@@ -527,20 +527,18 @@ async function list_audit_logs(
   );
 
   return result.rows.map((row) => ({
-    id: Number(row.audit_log_id),
+    id: row.audit_log_id,
 
     action: row.action,
 
     entity_type: row.entity_type,
-    entity_id: row.entity_id
-      ? Number(row.entity_id)
-      : null,
+    entity_id: row.entity_id || null,
 
     metadata: row.metadata || null,
 
     actor: row.user_id
       ? {
-        user_id: Number(row.user_id),
+        user_id: row.user_id,
 
         full_name: [
           row.first_name,

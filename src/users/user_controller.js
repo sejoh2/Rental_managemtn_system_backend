@@ -90,14 +90,12 @@ async function get_user(req, res, next) {
     return res.status(200).json({
       success: true,
       data: {
-        user_id: Number(user.user_id),
+        user_id: user.user_id,
         first_name: user.first_name,
         last_name: user.last_name,
         phone: user.phone,
         role: user.role,
-        owner_id: user.owner_id
-          ? Number(user.owner_id)
-          : null,
+        owner_id: user.owner_id || null,
         status: user.status,
         last_login_at: user.last_login_at,
         created_at: user.created_at,

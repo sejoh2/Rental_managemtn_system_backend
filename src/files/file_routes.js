@@ -15,6 +15,8 @@ const {
   as_owner,
 } = require("../caretakers/caretaker_acting");
 
+const { PREFIX, id_or_throw, is_id, zid } = require("../utils/ids");
+
 const router = express.Router();
 
 /*
@@ -29,13 +31,13 @@ const guard = [
 
 const kind_field = z.enum(Object.keys(file_service.kinds));
 
-const id_field = z.coerce.number()
-  .int()
-  .positive();
-
+/*
+  The kind of record it must be is checked with the kind
+  (file_service.get_target_or_throw).
+*/
 const target_schema = z.object({
   kind: kind_field,
-  target_id: id_field,
+  target_id: zid(null, "record"),
 });
 
 const upload_schema = target_schema.extend({
@@ -54,11 +56,23 @@ const counts_schema = z.object({
   kind: kind_field,
 
   /*
-    "12,15,19"
+    "tnt_...,tnt_...", up to 500, each of the kind's records.
   */
   target_ids: z.string()
     .trim()
-    .regex(/^\d+(,\d+){0,499}$/),
+    .min(1)
+    .max(500 * 27),
+}).superRefine((data, context) => {
+  const ids = data.target_ids.split(",");
+  const prefix = file_service.kinds[data.kind]?.prefix;
+
+  if (ids.length > 500 || !ids.every((id) => is_id(id, prefix))) {
+    context.addIssue({
+      code: "custom",
+      path: ["target_ids"],
+      message: "A list of valid record IDs, separated by commas, is required.",
+    });
+  }
 });
 
 function validate(schema, data) {
@@ -151,16 +165,7 @@ const file_guard = [
 ];
 
 function file_id_or_throw(value) {
-  const result = id_field.safeParse(value);
-
-  if (!result.success) {
-    const error = new Error("A valid file ID is required.");
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return result.data;
+  return id_or_throw(value, "file", PREFIX.file);
 }
 
 function respond(handler, status = 200) {
@@ -201,7 +206,7 @@ router.get(
     return file_service.count_files(
       req.user,
       kind,
-      target_ids.split(",").map(Number)
+      target_ids.split(",")
     );
   })
 );

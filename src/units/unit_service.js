@@ -6,8 +6,8 @@ const {
 
 function public_unit(unit) {
   return {
-    id: Number(unit.id),
-    property_id: Number(unit.property_id),
+    id: unit.id,
+    property_id: unit.property_id,
 
     unit_number: unit.unit_number,
     unit_type: unit.unit_type,
@@ -68,7 +68,7 @@ function public_unit(unit) {
     */
     current_tenant: unit.current_tenant_id
       ? {
-        tenant_id: Number(unit.current_tenant_id),
+        tenant_id: unit.current_tenant_id,
         full_name: unit.current_tenant_name,
         status: unit.current_tenant_status,
         balance: Number(unit.current_tenant_balance),

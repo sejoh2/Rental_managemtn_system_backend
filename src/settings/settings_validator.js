@@ -1,5 +1,9 @@
 const { z } = require("zod");
 
+const {
+  id_or_throw,
+} = require("../utils/ids");
+
 const profile_schema = z.object({
   full_name: z.string()
     .trim()
@@ -77,22 +81,7 @@ function validate(schema, data, message) {
 }
 
 function validate_property_id(value) {
-  const property_id = Number(value);
-
-  if (
-    !Number.isInteger(property_id) ||
-    property_id < 1
-  ) {
-    const error = new Error(
-      "A valid property ID is required."
-    );
-
-    error.status_code = 422;
-
-    throw error;
-  }
-
-  return property_id;
+  return id_or_throw(value, "property", "prp");
 }
 
 module.exports = {

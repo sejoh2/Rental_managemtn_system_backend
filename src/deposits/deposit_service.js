@@ -120,7 +120,7 @@ async function load_settlement(client, tenant_id) {
 
 function public_settlement(settlement) {
   return {
-    id: Number(settlement.id),
+    id: settlement.id,
 
     deposits_held: Number(settlement.deposits_held),
     credit_held: Number(settlement.credit_held),
@@ -208,7 +208,7 @@ function build_groups(charges, deductions = []) {
             Number(charge.amount_paid)
       )
       .map((charge) => ({
-        charge_id: Number(charge.id),
+        charge_id: charge.id,
         charge_type: charge.charge_type,
         description: charge.description,
         billing_period: charge.billing_period,
@@ -326,7 +326,7 @@ async function load_repairs(client, tenant_id) {
     const at_move_out = money(row.at_move_out);
 
     return {
-      charge_id: Number(row.id),
+      charge_id: row.id,
       description: row.description,
       charged_on: row.charged_on,
       amount,
@@ -463,12 +463,15 @@ async function confirm_reconciliation(
 
     /*
       Each deduction becomes a charge on the tenant, so it is
-      on their record like any other bill.
+      on their record like any other bill. A deduction comes from
+      nothing else, so its source is the charge itself: that keeps
+      several deductions apart.
     */
-    for (const [index, deduction] of data.deductions.entries()) {
+    for (const deduction of data.deductions) {
       await client.query(
         `
           INSERT INTO tenant_charges (
+            id,
             tenant_id,
             owner_id,
             property_id,
@@ -480,7 +483,8 @@ async function confirm_reconciliation(
             description,
             source_id
           )
-          VALUES (
+          SELECT
+            fresh.id,
             $1,$2,$3,$4,
             'deduction',
             DATE '1970-01-01',
@@ -488,8 +492,9 @@ async function confirm_reconciliation(
               CURRENT_TIMESTAMP
               AT TIME ZONE 'Africa/Nairobi'
             )::DATE,
-            $5,$6,$7
-          )
+            $5,$6,
+            fresh.id
+          FROM (SELECT new_id('chg') AS id) AS fresh
         `,
         [
           tenant.id,
@@ -498,7 +503,6 @@ async function confirm_reconciliation(
           tenant.unit_id,
           deduction.amount,
           deduction.description,
-          index + 1,
         ]
       );
     }
@@ -662,7 +666,9 @@ async function confirm_reconciliation(
     /*
       The credit is now either used or part of the refund.
       What each credit held is kept with the settlement, so
-      reopening it can put the credit back exactly.
+      reopening it can put the credit back exactly. The newest
+      payment is noted too ('' when there is none, which every
+      later payment's ID sorts after).
     */
     const credits_before = await client.query(
       `
@@ -683,7 +689,7 @@ async function confirm_reconciliation(
             $1::JSONB,
             'last_payment_id',
             (
-              SELECT COALESCE(MAX(id), 0)
+              SELECT COALESCE(MAX(id), '')
               FROM payments
               WHERE tenant_id = $3
             )
@@ -693,7 +699,7 @@ async function confirm_reconciliation(
       [
         JSON.stringify(
           credits_before.rows.map((credit) => ({
-            id: Number(credit.id),
+            id: credit.id,
             remaining: Number(credit.remaining_amount),
           }))
         ),
@@ -832,8 +838,9 @@ async function reopen_reconciliation(
 
     /*
       The confirmation noted the tenant's newest payment, so a
-      later one is recognised by its number. A settlement made
-      before that was recorded falls back to the time.
+      later one is recognised by its ID (IDs sort by age). A
+      settlement made before that was recorded falls back to the
+      time.
     */
     const last_payment_id =
       settlement.breakdown?.last_payment_id;
@@ -845,9 +852,9 @@ async function reopen_reconciliation(
         WHERE tenant_id = $1
           AND status = 'matched'
           AND (
-            ($2::BIGINT IS NOT NULL AND id > $2::BIGINT)
+            ($2::record_id IS NOT NULL AND id > $2::record_id)
             OR (
-              $2::BIGINT IS NULL
+              $2::record_id IS NULL
               AND created_at > $3::TIMESTAMPTZ
             )
           )

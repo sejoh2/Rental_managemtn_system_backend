@@ -20,7 +20,7 @@ async function init_settings_tables() {
       owner settings.
     */
     CREATE TABLE IF NOT EXISTS owner_settings (
-      owner_id BIGINT PRIMARY KEY
+      owner_id record_id PRIMARY KEY
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 

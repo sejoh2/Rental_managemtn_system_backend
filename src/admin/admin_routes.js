@@ -17,6 +17,11 @@ const {
 } = require("../utils/csv");
 
 const {
+  id_or_throw,
+  zid,
+} = require("../utils/ids");
+
+const {
   authenticate,
 } = require("../auth/auth_middleware");
 
@@ -33,15 +38,9 @@ router.use(authenticate);
 router.use(require_role("admin"));
 
 const audit_filters_schema = z.object({
-  owner_id: z.coerce.number()
-    .int()
-    .positive()
-    .optional(),
+  owner_id: zid("usr", "owner").optional(),
 
-  user_id: z.coerce.number()
-    .int()
-    .positive()
-    .optional(),
+  user_id: zid("usr", "user").optional(),
 
   action: z.string()
     .trim()
@@ -88,16 +87,11 @@ router.post(
   "/owners/:owner_id/open",
   async (req, res, next) => {
     try {
-      const owner_id = Number(req.params.owner_id);
-
-      if (!Number.isInteger(owner_id) || owner_id < 1) {
-        const error = new Error(
-          "A valid owner ID is required."
-        );
-
-        error.status_code = 422;
-        throw error;
-      }
+      const owner_id = id_or_throw(
+        req.params.owner_id,
+        "owner",
+        "usr"
+      );
 
       return res.status(200).json({
         success: true,
@@ -112,21 +106,6 @@ router.post(
     }
   }
 );
-
-function positive_id(value, label) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      `A valid ${label} ID is required.`
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
-}
 
 function respond(handler) {
   return async (req, res, next) => {
@@ -145,7 +124,7 @@ router.get(
   "/owners/:owner_id",
   respond((req) =>
     platform_service.get_owner_detail(
-      positive_id(req.params.owner_id, "owner")
+      id_or_throw(req.params.owner_id, "owner", "usr")
     )
   )
 );
@@ -196,7 +175,7 @@ router.post(
 
     return sender_service.review_sender_request(
       req.user,
-      positive_id(req.params.request_id, "request"),
+      id_or_throw(req.params.request_id, "request", "ssa"),
       {
         decision: result.data.decision,
         note: result.data.note || null,
@@ -316,7 +295,7 @@ router.get(
   "/audit-logs/:log_id",
   respond((req) =>
     admin_service.get_audit_log(
-      positive_id(req.params.log_id, "audit entry")
+      id_or_throw(req.params.log_id, "audit entry", "aud")
     )
   )
 );

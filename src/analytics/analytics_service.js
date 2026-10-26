@@ -21,6 +21,7 @@ function clean_path(value) {
 
   return (
     path
+      .replace(/\/[a-z]{3}_[0-9A-HJKMNP-TV-Z]{22}(?=\/|$)/g, "/:id")
       .replace(/\/[0-9a-f]{8,}(?=\/|$)/gi, "/:id")
       .replace(/\/\d+(?=\/|$)/g, "/:id")
       .slice(0, 200) || "/"

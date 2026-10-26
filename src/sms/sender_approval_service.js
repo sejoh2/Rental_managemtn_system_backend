@@ -37,9 +37,9 @@ function service_error(message, status_code = 400) {
 async function init_sender_approval_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS sms_sender_approvals (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('ssa'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -55,7 +55,7 @@ async function init_sender_approval_tables() {
       requested_at TIMESTAMPTZ NOT NULL
         DEFAULT CURRENT_TIMESTAMP,
 
-      reviewed_by BIGINT
+      reviewed_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -202,8 +202,8 @@ async function list_sender_requests() {
   `);
 
   return result.rows.map((row) => ({
-    id: Number(row.id),
-    owner_id: Number(row.owner_id),
+    id: row.id,
+    owner_id: row.owner_id,
 
     owner_name: [
       row.owner_first_name,
@@ -283,7 +283,7 @@ async function review_sender_request(
   });
 
   const [request] = (await list_sender_requests()).filter(
-    (item) => item.id === Number(approval.id)
+    (item) => item.id === approval.id
   );
 
   return request;

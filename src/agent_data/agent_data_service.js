@@ -283,15 +283,15 @@ async function with_billing(rows) {
             (SELECT MAX(p.paid_on)::TEXT FROM subscription_payments p WHERE p.owner_id = s.owner_id) AS last_paid_on
           FROM subscriptions s
           LEFT JOIN subscription_invoices i ON i.owner_id = s.owner_id AND i.kind = 'monthly' AND i.status = 'open'
-          WHERE s.owner_id = ANY($1::BIGINT[])
+          WHERE s.owner_id = ANY($1::record_id[])
         `,
         [rows.map((row) => row.landlord_id)]
       )
-    ).rows.map((row) => [String(row.owner_id), row])
+    ).rows.map((row) => [row.owner_id, row])
   );
 
   return rows.map((row) => {
-    const account = billing.get(String(row.landlord_id));
+    const account = billing.get(row.landlord_id);
 
     if (!account) return { ...row, kodi_billing: null };
 

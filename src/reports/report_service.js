@@ -87,8 +87,8 @@ function report_scope(user) {
   return {
     owner_id:
       user.role === "caretaker"
-        ? Number(user.owner_id)
-        : Number(user.user_id),
+        ? user.owner_id
+        : user.user_id,
 
     is_caretaker: user.role === "caretaker",
   };
@@ -199,7 +199,7 @@ async function get_occupancy_summary(
       WHERE properties.owner_id = $1
         AND properties.status <> 'archived'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR units.property_id = $2
         )
     `,
@@ -302,7 +302,7 @@ async function get_arrears_by_property(
       WHERE properties.owner_id = $1
         AND properties.status <> 'archived'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR properties.id = $2
         )
 
@@ -321,7 +321,7 @@ async function get_arrears_by_property(
   );
 
   return result.rows.map((row) => ({
-    property_id: Number(row.property_id),
+    property_id: row.property_id,
     property_name: row.property_name,
 
     /*
@@ -395,7 +395,7 @@ async function get_collection_summary(
           )::DATE <= $3
 
           AND (
-            $4::BIGINT IS NULL
+            $4::TEXT IS NULL
             OR payments.property_id = $4
           )
 
@@ -428,7 +428,7 @@ async function get_collection_summary(
           )::DATE <= $3
 
           AND (
-            $4::BIGINT IS NULL
+            $4::TEXT IS NULL
             OR deposit_settlements.property_id = $4
           )
       )
@@ -570,7 +570,7 @@ async function get_water_summary(
             AND water_meter_readings.billing_period <= $3
 
             AND (
-              $4::BIGINT IS NULL
+              $4::TEXT IS NULL
               OR water_meter_readings.property_id = $4
             )
         ) AS meter_readings_submitted,
@@ -586,7 +586,7 @@ async function get_water_summary(
             AND water_meter_readings.status = 'flagged'
 
             AND (
-              $4::BIGINT IS NULL
+              $4::TEXT IS NULL
               OR water_meter_readings.property_id = $4
             )
         ) AS flagged_readings
@@ -601,7 +601,7 @@ async function get_water_summary(
         AND tenant_charges.billing_period <= $3
 
         AND (
-          $4::BIGINT IS NULL
+          $4::TEXT IS NULL
           OR tenant_charges.property_id = $4
         )
     `,
@@ -662,7 +662,7 @@ async function get_expense_summary(
         AND expenses.expense_date <= $3
 
         AND (
-          $4::BIGINT IS NULL
+          $4::TEXT IS NULL
           OR expenses.property_id = $4
         )
     `,
@@ -739,7 +739,7 @@ async function get_sms_usage(
         )::DATE <= $3
 
         AND (
-          $4::BIGINT IS NULL
+          $4::TEXT IS NULL
           OR sms_messages.property_id = $4
         )
     `,
@@ -837,7 +837,7 @@ async function get_report_details(
         AND tenant_charges.billing_period <= $3
         AND properties.status <> 'archived'
         AND (
-          $4::BIGINT IS NULL
+          $4::TEXT IS NULL
           OR tenant_charges.property_id = $4
         )
 
@@ -889,7 +889,7 @@ async function get_report_details(
         AND tenant_charges.billing_period <= $3
         AND properties.status <> 'archived'
         AND (
-          $4::BIGINT IS NULL
+          $4::TEXT IS NULL
           OR tenant_charges.property_id = $4
         )
 
@@ -945,7 +945,7 @@ async function get_report_details(
         )
         AND properties.status <> 'archived'
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR tenant_charges.property_id = $2
         )
 
@@ -1367,14 +1367,14 @@ async function get_tenant_statement(
 
     return {
       tenant: {
-        id: Number(tenant.id),
+        id: tenant.id,
 
-        owner_id: Number(tenant.owner_id),
+        owner_id: tenant.owner_id,
 
-        property_id: Number(tenant.property_id),
+        property_id: tenant.property_id,
         property_name: tenant.property_name,
 
-        unit_id: Number(tenant.unit_id),
+        unit_id: tenant.unit_id,
         unit_number: tenant.unit_number,
 
         full_name: tenant.full_name,
@@ -1389,7 +1389,7 @@ async function get_tenant_statement(
       period,
 
       charges: charges_result.rows.map((charge) => ({
-        id: Number(charge.id),
+        id: charge.id,
 
         charge_type: charge.charge_type,
         description: charge.description,
@@ -1417,7 +1417,7 @@ async function get_tenant_statement(
       })),
 
       payments: payments_result.rows.map((payment) => ({
-        id: Number(payment.id),
+        id: payment.id,
 
         amount: as_number(payment.amount),
 

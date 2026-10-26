@@ -24,7 +24,7 @@ function push_to_caretaker(user, request, title) {
     except_user_id: user.user_id,
     title,
     body: `${request.title} · ${place}${request.priority === "urgent" ? " · Urgent" : ""}`,
-    data: { type: "maintenance", repair_id: String(request.id) },
+    data: { type: "maintenance", repair_id: request.id },
     urgent: request.priority === "urgent",
   }).catch((error) => console.error("[PUSH] Maintenance notification failed:", error.message));
 }
@@ -43,16 +43,14 @@ const {
 
 function public_request(request) {
   return {
-    id: Number(request.id),
+    id: request.id,
 
-    owner_id: Number(request.owner_id),
-    property_id: Number(request.property_id),
+    owner_id: request.owner_id,
+    property_id: request.property_id,
 
     property_name: request.property_name || null,
 
-    unit_id: request.unit_id
-      ? Number(request.unit_id)
-      : null,
+    unit_id: request.unit_id || null,
 
     unit_number: request.unit_number || null,
 
@@ -62,14 +60,12 @@ function public_request(request) {
     priority: request.priority,
     status: request.status,
 
-    reported_by: Number(request.reported_by),
+    reported_by: request.reported_by,
     reporter_name: request.reporter_name || null,
     reporter_role: request.reporter_role,
 
     assigned_caretaker_id:
-      request.assigned_caretaker_id
-        ? Number(request.assigned_caretaker_id)
-        : null,
+      request.assigned_caretaker_id || null,
 
     assigned_caretaker_name:
       request.assigned_caretaker_name || null,
@@ -98,17 +94,11 @@ function public_request(request) {
     */
     charge_timing: request.charge_timing || "now",
 
-    expense_id: request.expense_id
-      ? Number(request.expense_id)
-      : null,
+    expense_id: request.expense_id || null,
 
-    tenant_charge_id: request.tenant_charge_id
-      ? Number(request.tenant_charge_id)
-      : null,
+    tenant_charge_id: request.tenant_charge_id || null,
 
-    charged_tenant_id: request.charged_tenant_id
-      ? Number(request.charged_tenant_id)
-      : null,
+    charged_tenant_id: request.charged_tenant_id || null,
 
     /*
       When the tenant was last sent an SMS about the charge;
@@ -144,8 +134,8 @@ function public_request(request) {
 
 function get_owner_id(user) {
   return user.role === "caretaker"
-    ? Number(user.owner_id)
-    : Number(user.user_id);
+    ? user.owner_id
+    : user.user_id;
 }
 
 async function ensure_property_access(
@@ -588,12 +578,12 @@ async function list_requests(user, filters) {
       WHERE maintenance_requests.owner_id = $1
 
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR maintenance_requests.property_id = $2
         )
 
         AND (
-          $3::BIGINT IS NULL
+          $3::TEXT IS NULL
           OR maintenance_requests.unit_id = $3
         )
 
@@ -608,7 +598,7 @@ async function list_requests(user, filters) {
         )
 
         AND (
-          $6::BIGINT IS NULL
+          $6::TEXT IS NULL
           OR EXISTS (
             SELECT 1
             FROM property_caretaker_assignments
@@ -1080,7 +1070,7 @@ async function clear_notice(client, user, request_ids) {
         UPDATE maintenance_requests
         SET caretaker_notice = NULL,
           caretaker_notice_at = NULL
-        WHERE id = ANY($1::BIGINT[])
+        WHERE id = ANY($1::record_id[])
           AND caretaker_notice IS NOT NULL
       `,
       [request_ids]
@@ -1096,7 +1086,7 @@ async function clear_notice(client, user, request_ids) {
         UPDATE maintenance_requests
         SET owner_notice = NULL,
           owner_notice_at = NULL
-        WHERE id = ANY($1::BIGINT[])
+        WHERE id = ANY($1::record_id[])
           AND owner_id = $2
           AND owner_notice IS NOT NULL
       `,
@@ -1500,7 +1490,7 @@ async function get_status_counts(user) {
       WHERE owner_id = $1
 
         AND (
-          $2::BIGINT IS NULL
+          $2::TEXT IS NULL
           OR EXISTS (
             SELECT 1
             FROM property_caretaker_assignments

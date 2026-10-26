@@ -1,5 +1,3 @@
-const crypto = require("crypto");
-
 const db = require("../config/db");
 
 const {
@@ -29,7 +27,7 @@ const {
 
 function public_account(account) {
   return {
-    id: Number(account.id),
+    id: account.id,
     account_for: account.account_for,
     provider_code: account.provider_code,
     account_type: account.account_type,
@@ -55,8 +53,8 @@ function public_property(
   overview = {}
 ) {
   return {
-    id: Number(property.id),
-    owner_id: Number(property.owner_id),
+    id: property.id,
+    owner_id: property.owner_id,
 
     name: property.name,
     location: property.location,
@@ -134,7 +132,7 @@ function public_property(
 
     caretaker: overview.caretaker_id
       ? {
-        caretaker_id: Number(overview.caretaker_id),
+        caretaker_id: overview.caretaker_id,
 
         full_name: [
           overview.caretaker_first_name,
@@ -213,7 +211,7 @@ async function ensure_business_number_available(
       WHERE business_number = $1
         AND status = 'active'
         AND (
-          $2::BIGINT IS NULL
+          $2::record_id IS NULL
           OR id <> $2
         )
       LIMIT 1
@@ -311,17 +309,14 @@ async function validate_payment_account_connection(
     environment: account.environment,
   });
 
-  const connection_id = crypto.randomUUID();
-
   const expires_minutes =
     Number(
       process.env.PROPERTY_CONNECTION_EXPIRES_MINUTES
     ) || 10;
 
-  await db.query(
+  const connection_result = await db.query(
     `
       INSERT INTO property_connection_checks (
-        id,
         owner_id,
         account_for,
         provider_code,
@@ -334,12 +329,12 @@ async function validate_payment_account_connection(
         expires_at
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-        CURRENT_TIMESTAMP + ($11 || ' minutes')::INTERVAL
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,
+        CURRENT_TIMESTAMP + ($10 || ' minutes')::INTERVAL
       )
+      RETURNING id
     `,
     [
-      connection_id,
       owner.user_id,
       account_for,
       account.provider_code,
@@ -352,6 +347,8 @@ async function validate_payment_account_connection(
       expires_minutes,
     ]
   );
+
+  const connection_id = connection_result.rows[0].id;
 
   await log_audit({
     user_id: owner.user_id,

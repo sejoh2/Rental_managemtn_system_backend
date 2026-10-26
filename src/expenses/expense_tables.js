@@ -7,17 +7,17 @@ async function init_expense_tables() {
       An active caretaker may only operate on assigned properties.
     */
     CREATE TABLE IF NOT EXISTS property_caretaker_assignments (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('cta'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      caretaker_id BIGINT NOT NULL
+      caretaker_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -39,13 +39,13 @@ async function init_expense_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS expenses (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('exp'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -79,13 +79,13 @@ async function init_expense_tables() {
 
       void_reason TEXT,
 
-      voided_by BIGINT
+      voided_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
       voided_at TIMESTAMPTZ,
 
-      created_by BIGINT NOT NULL
+      created_by record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE RESTRICT,
 
@@ -149,10 +149,10 @@ async function init_expense_tables() {
   */
   await db.query(`
     ALTER TABLE expenses
-      ADD COLUMN IF NOT EXISTS maintenance_request_id BIGINT;
+      ADD COLUMN IF NOT EXISTS maintenance_request_id record_id;
 
     ALTER TABLE expenses
-      ADD COLUMN IF NOT EXISTS unit_id BIGINT
+      ADD COLUMN IF NOT EXISTS unit_id record_id
       REFERENCES units(id)
       ON DELETE SET NULL;
   `);

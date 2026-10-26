@@ -119,7 +119,7 @@ async function queue_push({ user_id, title, body, data = {}, urgent = false, now
     send_due_pushes().catch((error) => console.error("[PUSH] Sending failed:", error.message));
   }
 
-  return Number(result.rows[0].id);
+  return result.rows[0].id;
 }
 
 /*

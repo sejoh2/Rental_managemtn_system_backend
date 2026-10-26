@@ -3,17 +3,17 @@ const db = require("../config/db");
 async function init_property_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS properties (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('prp'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      caretaker_id BIGINT
+      caretaker_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
-      created_by BIGINT
+      created_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -103,13 +103,13 @@ async function init_property_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS payment_accounts (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pac'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
@@ -154,9 +154,9 @@ async function init_property_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS provider_credentials (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pcr'),
 
-      payment_account_id BIGINT NOT NULL UNIQUE
+      payment_account_id record_id NOT NULL UNIQUE
         REFERENCES payment_accounts(id)
         ON DELETE CASCADE,
 
@@ -191,9 +191,9 @@ async function init_property_tables() {
       is abandoned.
     */
     CREATE TABLE IF NOT EXISTS property_connection_checks (
-      id UUID PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('chk'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
@@ -225,7 +225,7 @@ async function init_property_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS mpesa_c2b_callback_events (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('mce'),
 
       event_type VARCHAR(30) NOT NULL
         CHECK (event_type IN ('validation', 'confirmation')),

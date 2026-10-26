@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const { id_or_throw } = require("../utils/ids");
 
 const deposit_service = require("./deposit_service");
 
@@ -71,18 +72,7 @@ function validate(schema, data) {
 }
 
 function validate_tenant_id(value) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      "A valid tenant ID is required."
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+  return id_or_throw(value, "tenant", "tnt");
 }
 
 /*

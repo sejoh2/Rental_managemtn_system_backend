@@ -11,6 +11,8 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const { PREFIX, id_or_throw } = require("../utils/ids");
+
 const router = express.Router();
 
 /*
@@ -63,18 +65,7 @@ const settings_schema = z.object({
 );
 
 function property_id_or_throw(value) {
-  const id = Number(value);
-
-  if (!Number.isInteger(id) || id < 1) {
-    const error = new Error(
-      "A valid property ID is required."
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return id;
+  return id_or_throw(value, "property", PREFIX.property);
 }
 
 router.get(

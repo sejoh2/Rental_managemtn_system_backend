@@ -3,21 +3,21 @@ const db = require("../config/db");
 async function init_payment_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS tenant_charges (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('chg'),
 
-      tenant_id BIGINT NOT NULL
+      tenant_id record_id NOT NULL
         REFERENCES tenants(id)
         ON DELETE CASCADE,
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      unit_id BIGINT NOT NULL
+      unit_id record_id NOT NULL
         REFERENCES units(id)
         ON DELETE RESTRICT,
 
@@ -63,25 +63,25 @@ async function init_payment_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS payments (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pay'),
 
-      owner_id BIGINT
+      owner_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
-      property_id BIGINT
+      property_id record_id
         REFERENCES properties(id)
         ON DELETE SET NULL,
 
-      unit_id BIGINT
+      unit_id record_id
         REFERENCES units(id)
         ON DELETE SET NULL,
 
-      tenant_id BIGINT
+      tenant_id record_id
         REFERENCES tenants(id)
         ON DELETE SET NULL,
 
-      payment_account_id BIGINT
+      payment_account_id record_id
         REFERENCES payment_accounts(id)
         ON DELETE SET NULL,
 
@@ -139,11 +139,11 @@ async function init_payment_tables() {
 
       provider_payload JSONB,
 
-      recorded_by BIGINT
+      recorded_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
-      matched_by BIGINT
+      matched_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -156,13 +156,13 @@ async function init_payment_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS payment_allocations (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('pal'),
 
-      payment_id BIGINT NOT NULL
+      payment_id record_id NOT NULL
         REFERENCES payments(id)
         ON DELETE CASCADE,
 
-      tenant_charge_id BIGINT NOT NULL
+      tenant_charge_id record_id NOT NULL
         REFERENCES tenant_charges(id)
         ON DELETE RESTRICT,
 
@@ -175,17 +175,17 @@ async function init_payment_tables() {
     );
 
     CREATE TABLE IF NOT EXISTS tenant_credits (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('crd'),
 
-      tenant_id BIGINT NOT NULL
+      tenant_id record_id NOT NULL
         REFERENCES tenants(id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      source_payment_id BIGINT NOT NULL UNIQUE
+      source_payment_id record_id NOT NULL UNIQUE
         REFERENCES payments(id)
         ON DELETE CASCADE,
 
@@ -313,8 +313,8 @@ async function init_payment_tables() {
       ADD COLUMN IF NOT EXISTS description VARCHAR(255);
 
     ALTER TABLE tenant_charges
-      ADD COLUMN IF NOT EXISTS source_id BIGINT
-      NOT NULL DEFAULT 0;
+      ADD COLUMN IF NOT EXISTS source_id record_id
+      NOT NULL DEFAULT '';
 
     ALTER TABLE tenant_charges
       DROP CONSTRAINT IF EXISTS
@@ -452,7 +452,7 @@ async function init_payment_tables() {
       VARCHAR(20);
 
     ALTER TABLE payments
-      ADD COLUMN IF NOT EXISTS reversed_by BIGINT
+      ADD COLUMN IF NOT EXISTS reversed_by record_id
       REFERENCES users(user_id)
       ON DELETE SET NULL;
 

@@ -3,21 +3,21 @@ const db = require("../config/db");
 async function init_water_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS water_meter_readings (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('wrd'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      unit_id BIGINT NOT NULL
+      unit_id record_id NOT NULL
         REFERENCES units(id)
         ON DELETE RESTRICT,
 
-      tenant_id BIGINT
+      tenant_id record_id
         REFERENCES tenants(id)
         ON DELETE SET NULL,
 
@@ -57,17 +57,17 @@ async function init_water_tables() {
 
       flag_reason TEXT,
 
-      reviewed_by BIGINT
+      reviewed_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
       reviewed_at TIMESTAMPTZ,
 
-      tenant_charge_id BIGINT UNIQUE
+      tenant_charge_id record_id UNIQUE
         REFERENCES tenant_charges(id)
         ON DELETE SET NULL,
 
-      submitted_by BIGINT
+      submitted_by record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 
@@ -113,13 +113,13 @@ async function init_water_tables() {
   */
   await db.query(`
     CREATE TABLE IF NOT EXISTS water_reading_reminders (
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
       billing_period DATE NOT NULL,
 
-      caretaker_id BIGINT
+      caretaker_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
 

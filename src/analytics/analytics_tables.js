@@ -14,14 +14,14 @@ const db = require("../config/db");
 async function init_analytics_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS analytics_events (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('ane'),
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
       visitor_id VARCHAR(64) NOT NULL,
       session_id VARCHAR(64) NOT NULL,
 
       -- Signed in: who, and as what (owner, caretaker, user).
-      user_id BIGINT
+      user_id record_id
         REFERENCES users(user_id)
         ON DELETE SET NULL,
       role VARCHAR(20),

@@ -18,14 +18,14 @@ async function init_live_tables() {
     RETURNS TRIGGER AS
     $$
     DECLARE
-      row_owner_id BIGINT;
+      row_owner_id TEXT;
     BEGIN
       IF TG_ARGV[0] = 'admin' THEN
         PERFORM pg_notify('bell_changed', '{"to":"admin"}');
       ELSE
         row_owner_id := COALESCE(
-          (to_jsonb(NEW) ->> 'owner_id')::BIGINT,
-          (to_jsonb(OLD) ->> 'owner_id')::BIGINT
+          to_jsonb(NEW) ->> 'owner_id',
+          to_jsonb(OLD) ->> 'owner_id'
         );
 
         IF row_owner_id IS NOT NULL THEN
@@ -148,17 +148,17 @@ async function init_data_change_triggers() {
     $$
     DECLARE
       row_data JSONB;
-      row_owner_id BIGINT;
-      row_property_id BIGINT;
+      row_owner_id TEXT;
+      row_property_id TEXT;
     BEGIN
       row_data := COALESCE(to_jsonb(NEW), to_jsonb(OLD));
 
       row_property_id := CASE
-        WHEN TG_TABLE_NAME = 'properties' THEN (row_data ->> 'id')::BIGINT
-        ELSE (row_data ->> 'property_id')::BIGINT
+        WHEN TG_TABLE_NAME = 'properties' THEN row_data ->> 'id'
+        ELSE row_data ->> 'property_id'
       END;
 
-      row_owner_id := (row_data ->> 'owner_id')::BIGINT;
+      row_owner_id := row_data ->> 'owner_id';
 
       IF row_owner_id IS NULL AND row_property_id IS NOT NULL THEN
         SELECT owner_id INTO row_owner_id

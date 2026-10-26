@@ -14,6 +14,8 @@ const {
   require_role,
 } = require("../middleware/role_middleware");
 
+const { PREFIX, id_or_throw } = require("../utils/ids");
+
 const router = express.Router();
 
 /*
@@ -64,14 +66,10 @@ router.put(
   owner_guard,
   async (req, res, next) => {
     try {
-      const property_id = Number(req.params.property_id);
+      const property_id = id_or_throw(req.params.property_id, "property", PREFIX.property);
       const body = permission_schema.safeParse(req.body);
 
-      if (
-        !Number.isInteger(property_id) ||
-        property_id < 1 ||
-        !body.success
-      ) {
+      if (!body.success) {
         const error = new Error(
           "Say whether the caretaker is allowed: allowed must be true or false."
         );

@@ -7,17 +7,17 @@ const {
 async function init_tenant_tables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS tenants (
-      id BIGSERIAL PRIMARY KEY,
+      id record_id PRIMARY KEY DEFAULT new_id('tnt'),
 
-      owner_id BIGINT NOT NULL
+      owner_id record_id NOT NULL
         REFERENCES users(user_id)
         ON DELETE CASCADE,
 
-      property_id BIGINT NOT NULL
+      property_id record_id NOT NULL
         REFERENCES properties(id)
         ON DELETE CASCADE,
 
-      unit_id BIGINT NOT NULL
+      unit_id record_id NOT NULL
         REFERENCES units(id)
         ON DELETE RESTRICT,
 
@@ -186,7 +186,7 @@ async function init_tenant_tables() {
       action: "UNIT_OLD_STATUSES_CLEARED",
       entity_type: "unit",
       metadata: {
-        units: cleared.rows.map((row) => ({ unit_id: Number(row.id), status: row.status })),
+        units: cleared.rows.map((row) => ({ unit_id: row.id, status: row.status })),
       },
     });
   }

@@ -1,5 +1,7 @@
 const { z } = require("zod");
 
+const { PREFIX, id_or_throw } = require("../utils/ids");
+
 const water_billing_methods = [
   "fixed_monthly",
   "per_unit_metered",
@@ -252,33 +254,11 @@ function validate(schema, value) {
 }
 
 function validate_property_id(value) {
-  const property_id = Number(value);
-
-  if (!Number.isInteger(property_id) || property_id < 1) {
-    const error = new Error(
-      "A valid property ID is required."
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return property_id;
+  return id_or_throw(value, "property", PREFIX.property);
 }
 
 function validate_unit_id(value) {
-  const unit_id = Number(value);
-
-  if (!Number.isInteger(unit_id) || unit_id < 1) {
-    const error = new Error(
-      "A valid unit ID is required."
-    );
-
-    error.status_code = 422;
-    throw error;
-  }
-
-  return unit_id;
+  return id_or_throw(value, "unit", PREFIX.unit);
 }
 
 module.exports = {
