@@ -614,7 +614,8 @@ async function create_property(owner, data, ip_address) {
         data.water_reading_due_days,
         data.water_missed_reading_action,
         data.sms_sender_id || null,
-        data.service_charge_account,
+        // Its own account, when it has one: service charges are paid there only.
+        data.service_connection_id ? "service" : data.service_charge_account,
       ]
     );
 
@@ -707,9 +708,28 @@ async function update_property(
   );
 
   /*
-    Service charges can only be paid into an account the
-    property actually has.
+    Service charges are paid into one account only: their own
+    account when the property has one, otherwise the account
+    chosen here, which the property must actually have.
   */
+  if (data.service_charge_account && data.service_charge_account !== "service") {
+    const { account: service_account } = await get_property_payment_account(
+      db,
+      owner.user_id,
+      property_id,
+      "service"
+    );
+
+    if (service_account && service_account.status === "active") {
+      const error = new Error(
+        "This property has its own service charges account, so service charges and repairs are paid there. Remove that account to have them paid into another one."
+      );
+
+      error.status_code = 422;
+      throw error;
+    }
+  }
+
   if (
     data.service_charge_account &&
     data.service_charge_account !== "rent"
@@ -935,6 +955,14 @@ async function replace_payment_account(
       `,
       [connection_id]
     );
+
+    // A service charges account of its own: service charges are paid there only from now on.
+    if (account_for === "service") {
+      await client.query(
+        "UPDATE properties SET service_charge_account = 'service' WHERE id = $1",
+        [property_id]
+      );
+    }
 
     await client.query("COMMIT");
 
