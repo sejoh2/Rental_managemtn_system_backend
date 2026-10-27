@@ -20,7 +20,12 @@ function is_database_busy(error) {
 }
 
 function error_handler(error, req, res, next) {
-  console.error("[ERROR]", error);
+  // A failed call to another service: its status and answer only, never the request (it holds tokens).
+  if (error.isAxiosError) {
+    console.error("[ERROR] A call to another service failed:", error.config?.method?.toUpperCase(), String(error.config?.url || "").split("?")[0], error.response?.status || error.code || "", JSON.stringify(error.response?.data || {}).slice(0, 500));
+  } else {
+    console.error("[ERROR]", error);
+  }
 
   if (error.type === "entity.too.large") {
     return res.status(413).json({
