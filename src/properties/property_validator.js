@@ -13,6 +13,12 @@ const move_out_billing_options = [
   "full_month",
 ];
 
+const electricity_billing_methods = [
+  "none",
+  "fixed_monthly",
+  "entered",
+];
+
 const service_charge_account_options = [
   "rent",
   "water",
@@ -127,6 +133,16 @@ const create_property_schema = z.object({
     .min(0)
     .default(0),
 
+  /*
+    How the property bills electricity; its units follow it.
+  */
+  electricity_billing_method: z.enum(electricity_billing_methods)
+    .default("none"),
+
+  electricity_monthly_charge: z.coerce.number()
+    .min(0)
+    .default(0),
+
   water_billing_day: z.string()
     .trim()
     .max(50)
@@ -204,6 +220,18 @@ const create_property_schema = z.object({
   }
 
   if (
+    data.electricity_billing_method === "fixed_monthly" &&
+    data.electricity_monthly_charge <= 0
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["electricity_monthly_charge"],
+      message:
+        "The monthly electricity amount must be greater than zero.",
+    });
+  }
+
+  if (
     data.water_billing_method === "fixed_monthly" &&
     data.water_fixed_fee <= 0
   ) {
@@ -257,6 +285,21 @@ const update_property_schema = z.object({
     .trim()
     .max(50)
     .nullable()
+    .optional(),
+
+  /*
+    The electricity rule. Units that follow the property
+    change with it: vacant ones always, those with a tenant
+    only when apply_to_occupied_units is true (as for water).
+  */
+  electricity_billing_method: z.enum(electricity_billing_methods)
+    .optional(),
+
+  electricity_monthly_charge: z.coerce.number()
+    .min(0)
+    .optional(),
+
+  apply_to_occupied_units: z.boolean()
     .optional(),
 }).refine(
   (data) => Object.keys(data).length > 0,

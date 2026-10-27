@@ -77,6 +77,8 @@ function public_property(
       property.water_rate_per_unit
     ),
     water_fixed_fee: Number(property.water_fixed_fee),
+    electricity_billing_method: property.electricity_billing_method,
+    electricity_monthly_charge: Number(property.electricity_monthly_charge),
     water_billing_day: property.water_billing_day,
     water_reading_due_days: Number(
       property.water_reading_due_days
@@ -600,11 +602,13 @@ async function create_property(owner, data, ip_address) {
           water_reading_due_days,
           water_missed_reading_action,
           sms_sender_id,
-          service_charge_account
+          service_charge_account,
+          electricity_billing_method,
+          electricity_monthly_charge
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16,$17
+          $11,$12,$13,$14,$15,$16,$17,$18,$19
         )
         RETURNING id
       `,
@@ -627,6 +631,8 @@ async function create_property(owner, data, ip_address) {
         data.sms_sender_id || null,
         // Its own account, when it has one: service charges are paid there only.
         data.service_connection_id ? "service" : data.service_charge_account,
+        data.electricity_billing_method,
+        data.electricity_billing_method === "fixed_monthly" ? data.electricity_monthly_charge : 0,
       ]
     );
 
@@ -719,11 +725,35 @@ async function update_property(
     "move_out_billing",
     "sms_sender_id",
     "service_charge_account",
+    "electricity_billing_method",
+    "electricity_monthly_charge",
   ];
 
   const updated_fields = editable_fields.filter(
     (field) => data[field] !== undefined
   );
+
+  const electricity_changed =
+    data.electricity_billing_method !== undefined ||
+    data.electricity_monthly_charge !== undefined;
+
+  if (electricity_changed) {
+    const current = (
+      await db.query(
+        "SELECT electricity_billing_method, electricity_monthly_charge FROM properties WHERE id = $1 AND owner_id = $2",
+        [property_id, owner.user_id]
+      )
+    ).rows[0];
+    const method = data.electricity_billing_method ?? current?.electricity_billing_method;
+    const charge = Number(data.electricity_monthly_charge ?? current?.electricity_monthly_charge ?? 0);
+
+    if (method === "fixed_monthly" && !(charge > 0)) {
+      const error = new Error("The monthly electricity amount must be greater than zero.");
+
+      error.status_code = 422;
+      throw error;
+    }
+  }
 
   /*
     Service charges are paid into one account only: their own
@@ -803,12 +833,43 @@ async function update_property(
     throw error;
   }
 
+  /*
+    Units that follow the property get its electricity rule:
+    vacant ones always, those with a tenant only when asked
+    (the same as water rules). Units billed differently keep
+    their own.
+  */
+  let units_changed = 0;
+
+  if (electricity_changed) {
+    const updated = await db.query(
+      `
+        UPDATE units
+        SET
+          electricity_billing_method = CASE WHEN p.electricity_billing_method = 'entered' THEN 'entered' ELSE 'fixed_monthly' END,
+          electricity_monthly_charge = CASE WHEN p.electricity_billing_method = 'fixed_monthly' THEN p.electricity_monthly_charge ELSE NULL END
+        FROM properties p
+        WHERE p.id = units.property_id
+          AND units.property_id = $1
+          AND NOT units.electricity_billing_own
+          AND units.status = ANY($2)
+        RETURNING units.id
+      `,
+      [property_id, data.apply_to_occupied_units ? ["vacant", "occupied"] : ["vacant"]]
+    );
+
+    units_changed = updated.rows.length;
+  }
+
   await log_audit({
     user_id: owner.user_id,
     action: "PROPERTY_UPDATED",
     entity_type: "property",
     entity_id: property_id,
-    metadata: { updated_fields },
+    metadata: {
+      updated_fields,
+      ...(electricity_changed ? { units_changed, apply_to_occupied_units: Boolean(data.apply_to_occupied_units) } : {}),
+    },
     ip_address,
   });
 
@@ -889,7 +950,7 @@ async function replace_payment_account(
       );
 
       const public_error = new Error(
-        `Daraja C2B URL registration failed: ${daraja_message}`
+        error.status_code === 502 ? error.message : `Safaricom did not accept the payment address: ${daraja_message}`
       );
 
       public_error.status_code = 502;
@@ -1390,7 +1451,7 @@ async function reregister_payment_account_c2b_urls(
     });
 
     const public_error = new Error(
-      `Daraja C2B URL registration failed: ${daraja_message}`
+      error.status_code === 502 ? error.message : `Safaricom did not accept the payment address: ${daraja_message}`
     );
 
     public_error.status_code = 502;

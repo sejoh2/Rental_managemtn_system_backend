@@ -161,6 +161,18 @@ async function init_unit_tables() {
   `);
 
   /*
+    A unit follows its property's water and electricity rules
+    (decided 2026-10-27) unless the owner bills it differently:
+    then *_billing_own is true, it keeps its own settings, and
+    changing the property's rules leaves it alone.
+  */
+  await db.query(`
+    ALTER TABLE units
+      ADD COLUMN IF NOT EXISTS water_billing_own BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS electricity_billing_own BOOLEAN NOT NULL DEFAULT FALSE;
+  `);
+
+  /*
     A unit's type is no longer limited to a fixed list: the
     owner can type their own, such as "Single room".
     Safe to run again.

@@ -79,6 +79,19 @@ async function init_property_tables() {
       water_fixed_fee NUMERIC(12,2) NOT NULL DEFAULT 0
         CHECK (water_fixed_fee >= 0),
 
+      /*
+        How the property bills electricity (decided 2026-10-27),
+        which its units follow unless one is billed differently:
+        'none' not billed; 'fixed_monthly' the amount below with
+        rent each month; 'entered' an amount the owner types
+        each month.
+      */
+      electricity_billing_method VARCHAR(20) NOT NULL DEFAULT 'none'
+        CHECK (electricity_billing_method IN ('none', 'fixed_monthly', 'entered')),
+
+      electricity_monthly_charge NUMERIC(12,2) NOT NULL DEFAULT 0
+        CHECK (electricity_monthly_charge >= 0),
+
       water_billing_day VARCHAR(50)
         NOT NULL DEFAULT 'same_as_rent',
 
@@ -387,6 +400,13 @@ async function init_property_tables() {
     ALTER TABLE properties
       ADD COLUMN IF NOT EXISTS service_charge_account VARCHAR(30)
       NOT NULL DEFAULT 'rent';
+
+    -- The electricity rule, for a database made before it existed.
+    ALTER TABLE properties
+      ADD COLUMN IF NOT EXISTS electricity_billing_method VARCHAR(20) NOT NULL DEFAULT 'none'
+        CHECK (electricity_billing_method IN ('none', 'fixed_monthly', 'entered')),
+      ADD COLUMN IF NOT EXISTS electricity_monthly_charge NUMERIC(12,2) NOT NULL DEFAULT 0
+        CHECK (electricity_monthly_charge >= 0);
 
     ALTER TABLE properties
       DROP CONSTRAINT IF EXISTS
