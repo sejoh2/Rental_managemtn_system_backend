@@ -109,16 +109,24 @@ async function register_c2b_urls({
       };
     }
 
-    // Only the status and Safaricom's answer: the request holds the access token.
+    /*
+      Safaricom's own reason, not the bare "Request failed with
+      status code 500", so the owner (and the log) can see what
+      it refused.
+    */
+    const reason =
+      error.response?.data?.errorMessage ||
+      error.response?.data?.ResponseDescription ||
+      (error.code === "ECONNABORTED" ? "Safaricom did not answer in time." : null);
+
     console.error(
       "[MPESA] Registering the payment address failed:",
       error.response?.status || error.code || "",
       JSON.stringify(error.response?.data || {}).slice(0, 500)
     );
 
-    const reason = error.response?.data?.errorMessage || error.response?.data?.ResponseDescription || null;
     const refused = new Error(
-      `Safaricom did not accept the payment address for ${business_number}${reason ? `: ${String(reason).replace(/[.\s]+$/, "")}` : " (it answered with an error)"}. Try again in a moment; in the sandbox, try another test shortcode.`
+      `Safaricom did not accept the payment address for ${business_number}${reason ? `: ${String(reason).replace(/[.\s]+$/, "")}` : " (it answered with an error)"}.${/try again/i.test(String(reason || "")) ? "" : " Try again in a moment."}${environment === "production" ? "" : " Safaricom's sandbox is sometimes down for hours, and its test shortcodes are shared."}`
     );
 
     refused.status_code = 502;

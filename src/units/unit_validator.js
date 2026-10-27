@@ -69,7 +69,14 @@ const create_unit_schema = z.object({
     .min(0)
     .default(0),
 
-  water_billing_method: z.enum(water_billing_methods),
+  /*
+    false (the default): the unit follows the property's water
+    rule, and the water fields below (except the meter number)
+    are ignored. true: the unit is billed differently.
+  */
+  water_billing_own: z.boolean().default(false),
+
+  water_billing_method: z.enum(water_billing_methods).optional(),
 
   water_fixed_monthly_bill: z.coerce.number()
     .min(0)
@@ -86,6 +93,9 @@ const create_unit_schema = z.object({
     .max(100)
     .nullable()
     .optional(),
+
+  // The same for electricity.
+  electricity_billing_own: z.boolean().default(false),
 
   /*
     Optional fixed amount billed with rent each month.
@@ -115,6 +125,17 @@ const create_unit_schema = z.object({
   status: z.enum(editable_statuses)
     .default("vacant"),
 }).superRefine((data, context) => {
+  // Following the property: its rule is checked when it is applied.
+  if (!data.water_billing_own) return;
+
+  if (!data.water_billing_method) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["water_billing_method"],
+      message: "Choose how water is billed for this unit.",
+    });
+  }
+
   if (
     data.water_billing_method === "fixed_monthly" &&
     (!data.water_fixed_monthly_bill ||
@@ -181,6 +202,8 @@ const update_unit_schema = z.object({
     .min(0)
     .optional(),
 
+  water_billing_own: z.boolean().optional(),
+
   water_billing_method: z.enum(water_billing_methods)
     .optional(),
 
@@ -199,6 +222,8 @@ const update_unit_schema = z.object({
     .max(100)
     .nullable()
     .optional(),
+
+  electricity_billing_own: z.boolean().optional(),
 
   /*
     Optional fixed amount billed with rent each month.

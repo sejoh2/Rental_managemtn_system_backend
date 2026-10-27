@@ -360,6 +360,7 @@ async function update_water_rules(
           END
         WHERE property_id = $4
           AND status = ANY($5)
+          AND NOT water_billing_own
       `,
       [
         data.water_billing_method,

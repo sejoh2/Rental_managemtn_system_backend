@@ -3890,6 +3890,14 @@ components:
           enum: [per_unit_metered, fixed_monthly, included_in_rent]
         water_rate_per_unit: { type: number, example: 100 }
         water_fixed_fee: { type: number, example: 0 }
+        electricity_billing_method:
+          type: string
+          enum: [none, fixed_monthly, entered]
+          description: How the property bills electricity; its units follow it unless one is billed differently.
+        electricity_monthly_charge:
+          type: number
+          description: The monthly amount when electricity_billing_method is fixed_monthly.
+          example: 1000
         water_billing_day: { type: string, example: same_as_rent }
         water_reading_due_days: { type: integer, example: 3 }
         water_missed_reading_action:
@@ -3936,6 +3944,14 @@ components:
         water_billing_method: { type: string }
         water_rate_per_unit: { type: number }
         water_fixed_fee: { type: number }
+        electricity_billing_method:
+          type: string
+          enum: [none, fixed_monthly, entered]
+          description: How the property bills electricity; its units follow it unless one is billed differently.
+        electricity_monthly_charge:
+          type: number
+          description: The monthly amount when electricity_billing_method is fixed_monthly.
+          example: 1000
         sms_sender_id:
           type: string
           nullable: true
@@ -3975,6 +3991,17 @@ components:
       type: object
       description: Provide at least one field.
       properties:
+        electricity_billing_method:
+          type: string
+          enum: [none, fixed_monthly, entered]
+          description: How the property bills electricity; its units follow it unless one is billed differently.
+        electricity_monthly_charge:
+          type: number
+          description: The monthly amount when electricity_billing_method is fixed_monthly.
+          example: 1000
+        apply_to_occupied_units:
+          type: boolean
+          description: With an electricity change, also change units that have a tenant (otherwise only vacant units that follow the property).
         name: { type: string, example: Green View Apartments }
         location: { type: string, example: Kilimani, Nairobi }
         property_type:
@@ -4038,6 +4065,12 @@ components:
         - rent_deposit
         - water_billing_method
       properties:
+        water_billing_own:
+          type: boolean
+          description: false (default) - the unit follows the property's water rule and the water fields are filled in from it; true - billed differently.
+        electricity_billing_own:
+          type: boolean
+          description: The same for electricity.
         unit_number: { type: string, example: A1 }
         unit_type:
           type: string
@@ -4098,6 +4131,12 @@ components:
     Unit:
       type: object
       properties:
+        water_billing_own:
+          type: boolean
+          description: false (default) - the unit follows the property's water rule and the water fields are filled in from it; true - billed differently.
+        electricity_billing_own:
+          type: boolean
+          description: The same for electricity.
         id: { $ref: "#/components/schemas/RecordId" }
         property_id: { $ref: "#/components/schemas/RecordId" }
         unit_number: { type: string }
