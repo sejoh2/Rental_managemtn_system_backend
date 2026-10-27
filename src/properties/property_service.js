@@ -25,6 +25,14 @@ const {
   callback_token_matches,
 } = require("../payments/mpesa/c2b_callback_security");
 
+/*
+  Safaricom answers "duplicate notification info" when a number
+  already has a notice address: it keeps that one, so payments
+  may go elsewhere. The owner is told on the payment account.
+*/
+const ALREADY_REGISTERED_NOTE =
+  "Safaricom already had a notice address registered for this number, so it kept that one: payments may not reach Kodi. On a real PayBill, ask Safaricom (Daraja portal) to remove the old address, then reconnect this account. In the sandbox the test numbers are shared by many developers, so this is common.";
+
 function public_account(account) {
   return {
     id: account.id,
@@ -560,7 +568,7 @@ async function create_property(owner, data, ip_address) {
         connection.encrypted_credentials
       );
 
-      await register_c2b_urls({
+      const registered = await register_c2b_urls({
         consumer_key: credentials.consumer_key,
         consumer_secret: credentials.consumer_secret,
         business_number: connection.business_number,
@@ -568,6 +576,9 @@ async function create_property(owner, data, ip_address) {
         validation_url,
         confirmation_url,
       });
+
+      // Safaricom kept an address someone registered before: noted on the account, shown to the owner.
+      item.already_registered = Boolean(registered?.already_registered);
     }
 
     const property_result = await client.query(
@@ -629,6 +640,13 @@ async function create_property(owner, data, ip_address) {
         item.account_for,
         item.connection,
         item.callback_token
+      );
+    }
+
+    for (const item of connections.filter((entry) => entry.already_registered)) {
+      await client.query(
+        "UPDATE payment_accounts SET connection_error = $3 WHERE property_id = $1 AND account_for = $2",
+        [property_id, item.account_for, ALREADY_REGISTERED_NOTE]
       );
     }
 
@@ -1392,9 +1410,7 @@ async function reregister_payment_account_c2b_urls(
     `,
     [
       account.id,
-      daraja_response?.already_registered
-        ? "Safaricom says this number's notice address was already registered. If payments stop appearing, ask Safaricom to remove the old address (Daraja portal) and register again."
-        : null,
+      daraja_response?.already_registered ? ALREADY_REGISTERED_NOTE : null,
       seal_callback_token(callback_token),
     ]
   );

@@ -346,15 +346,16 @@ async function update_water_rules(
       `
         UPDATE units
         SET
-          water_billing_method = $1,
+          -- One type for $1 everywhere, or the database refuses ("inconsistent types").
+          water_billing_method = $1::TEXT,
           water_rate_per_unit = CASE
-            WHEN $1 = 'per_unit_metered'
-            THEN $2
+            WHEN $1::TEXT = 'per_unit_metered'
+            THEN $2::NUMERIC
             ELSE NULL
           END,
           water_fixed_monthly_bill = CASE
-            WHEN $1 = 'fixed_monthly'
-            THEN $3
+            WHEN $1::TEXT = 'fixed_monthly'
+            THEN $3::NUMERIC
             ELSE NULL
           END
         WHERE property_id = $4
