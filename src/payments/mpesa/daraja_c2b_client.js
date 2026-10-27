@@ -62,9 +62,9 @@ async function register_c2b_urls({
     environment,
   });
 
-  try {
-    const response = await axios.post(
-      `${get_base_url(environment)}/mpesa/c2b/v2/registerurl`,
+  const register = (version) =>
+    axios.post(
+      `${get_base_url(environment)}/mpesa/c2b/${version}/registerurl`,
       {
         ShortCode: String(business_number),
         ResponseType: "Completed",
@@ -80,7 +80,21 @@ async function register_c2b_urls({
       }
     );
 
-    return response.data;
+  try {
+    try {
+      return (await register("v2")).data;
+    } catch (error) {
+      /*
+        The sandbox's v2 registration is often "currently
+        unreachable" (500.003.1001) while v1 works: try v1 once.
+        Production keeps v2 only.
+      */
+      if (environment !== "production" && error.response?.status >= 500) {
+        return (await register("v1")).data;
+      }
+
+      throw error;
+    }
   } catch (error) {
     const message = String(
       error.response?.data?.errorMessage ||
@@ -95,7 +109,28 @@ async function register_c2b_urls({
       };
     }
 
-    throw error;
+    /*
+      Safaricom's own reason, not the bare "Request failed with
+      status code 500", so the owner (and the log) can see what
+      it refused.
+    */
+    const reason =
+      error.response?.data?.errorMessage ||
+      error.response?.data?.ResponseDescription ||
+      (error.code === "ECONNABORTED" ? "Safaricom did not answer in time." : null);
+
+    console.error(
+      "[MPESA] Registering the payment address failed:",
+      error.response?.status || error.code || "",
+      JSON.stringify(error.response?.data || {}).slice(0, 500)
+    );
+
+    const refused = new Error(
+      `Safaricom did not accept the payment address for ${business_number}${reason ? `: ${String(reason).replace(/[.\s]+$/, "")}` : " (it answered with an error)"}.${/try again/i.test(String(reason || "")) ? "" : " Try again in a moment."}${environment === "production" ? "" : " Safaricom's sandbox is sometimes down for hours, and its test shortcodes are shared."}`
+    );
+
+    refused.status_code = 502;
+    throw refused;
   }
 }
 

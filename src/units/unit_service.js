@@ -36,6 +36,10 @@ function public_unit(unit) {
 
     water_meter_number: unit.water_meter_number,
 
+    // true: billed differently from the property's rules.
+    water_billing_own: Boolean(unit.water_billing_own),
+    electricity_billing_own: Boolean(unit.electricity_billing_own),
+
     /*
       Optional fixed amount billed with rent each month.
       null means electricity is not billed for this unit.
@@ -158,7 +162,8 @@ async function ensure_owner_owns_property(
 ) {
   const result = await client.query(
     `
-      SELECT id, name
+      SELECT id, name, water_billing_method, water_rate_per_unit, water_fixed_fee,
+        electricity_billing_method, electricity_monthly_charge
       FROM properties
       WHERE id = $1
         AND owner_id = $2
@@ -212,6 +217,32 @@ async function get_unit_row_for_owner(
   return unit;
 }
 
+/*
+  A unit that follows its property takes the property's water and
+  electricity rules (decided 2026-10-27); one billed differently
+  keeps what the owner gave it. The meter number and the deposits
+  are always the unit's own. -> the data, with the rules filled in.
+*/
+function with_property_rules(property, data, existing = null) {
+  const water_own = data.water_billing_own ?? Boolean(existing?.water_billing_own);
+  const electricity_own = data.electricity_billing_own ?? Boolean(existing?.electricity_billing_own);
+  const filled = { ...data, water_billing_own: water_own, electricity_billing_own: electricity_own };
+
+  if (!water_own) {
+    filled.water_billing_method = property.water_billing_method;
+    filled.water_rate_per_unit = property.water_billing_method === "per_unit_metered" ? Number(property.water_rate_per_unit) : null;
+    filled.water_fixed_monthly_bill = property.water_billing_method === "fixed_monthly" ? Number(property.water_fixed_fee) : null;
+  }
+
+  if (!electricity_own) {
+    filled.electricity_billing_method = property.electricity_billing_method === "entered" ? "entered" : "fixed_monthly";
+    filled.electricity_monthly_charge =
+      property.electricity_billing_method === "fixed_monthly" ? Number(property.electricity_monthly_charge) : null;
+  }
+
+  return filled;
+}
+
 function validate_final_water_configuration(unit) {
   if (
     unit.water_billing_method === "fixed_monthly" &&
@@ -258,10 +289,13 @@ async function create_unit(
   data,
   ip_address
 ) {
-  await ensure_owner_owns_property(
+  const property = await ensure_owner_owns_property(
     owner.user_id,
     property_id
   );
+
+  data = with_property_rules(property, data);
+  validate_final_water_configuration(data);
 
   const result = await db.query(
     `
@@ -280,10 +314,12 @@ async function create_unit(
         status,
         electricity_monthly_charge,
         electricity_deposit,
-        electricity_billing_method
+        electricity_billing_method,
+        water_billing_own,
+        electricity_billing_own
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,$14,$7,$8,$9,$10,$11,$12,$13,$15
+        $1,$2,$3,$4,$5,$6,$14,$7,$8,$9,$10,$11,$12,$13,$15,$16,$17
       )
       RETURNING *
     `,
@@ -316,6 +352,9 @@ async function create_unit(
       data.water_deposit || 0,
 
       data.electricity_billing_method || "fixed_monthly",
+
+      data.water_billing_own,
+      data.electricity_billing_own,
     ]
   ).catch(throw_unit_number_conflict);
 
@@ -410,6 +449,36 @@ async function update_unit(
     throw error;
   }
 
+  /*
+    Following the property, or going back to it: the property's
+    rules are filled in. Billed differently: what was given.
+  */
+  const property = (
+    await db.query(
+      "SELECT water_billing_method, water_rate_per_unit, water_fixed_fee, electricity_billing_method, electricity_monthly_charge FROM properties WHERE id = $1",
+      [existing.property_id]
+    )
+  ).rows[0];
+
+  /*
+    Only an edit about billing (the unit form always is one)
+    applies the property's rules again; changing the status or
+    the rent alone leaves water and electricity as they are.
+  */
+  const BILLING_FIELDS = [
+    "water_billing_own", "water_billing_method", "water_rate_per_unit", "water_fixed_monthly_bill",
+    "electricity_billing_own", "electricity_billing_method", "electricity_monthly_charge",
+  ];
+
+  if (BILLING_FIELDS.some((field) => data[field] !== undefined)) {
+    data = with_property_rules(property, data, existing);
+
+    // Written even when empty, so the property's amount replaces the unit's own when it goes back to following.
+    if (!data.electricity_billing_own) {
+      data.electricity_monthly_charge = data.electricity_monthly_charge ?? null;
+    }
+  }
+
   const merged_unit = {
     ...existing,
     ...data,
@@ -487,7 +556,10 @@ async function update_unit(
         electricity_billing_method = COALESCE(
           $17,
           electricity_billing_method
-        )
+        ),
+
+        water_billing_own = $18,
+        electricity_billing_own = $19
       WHERE id = $11
       RETURNING *
       ),
@@ -564,6 +636,9 @@ async function update_unit(
       data.water_deposit ?? null,
 
       data.electricity_billing_method ?? null,
+
+      data.water_billing_own ?? Boolean(existing.water_billing_own),
+      data.electricity_billing_own ?? Boolean(existing.electricity_billing_own),
     ]
   ).catch(throw_unit_number_conflict);
 
