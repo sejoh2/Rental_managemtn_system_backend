@@ -422,6 +422,59 @@ async function init_property_tables() {
           'service'
         )
       );
+
+    /*
+      The account tenants pay water and electricity into when
+      the property has no account of their own for them: the
+      rent account, or another account the property has. Their
+      own account always wins while it is connected.
+
+      payment_order: how a payment that does not cover every
+      bill is shared out. 'fixed' pays deposits, rent,
+      electricity, water, then service charges; 'oldest' pays
+      the bill due first.
+    */
+    ALTER TABLE properties
+      ADD COLUMN IF NOT EXISTS water_charge_account VARCHAR(30)
+        NOT NULL DEFAULT 'rent',
+      ADD COLUMN IF NOT EXISTS electricity_charge_account VARCHAR(30)
+        NOT NULL DEFAULT 'rent',
+      ADD COLUMN IF NOT EXISTS payment_order VARCHAR(20)
+        NOT NULL DEFAULT 'fixed';
+
+    ALTER TABLE properties
+      DROP CONSTRAINT IF EXISTS properties_water_charge_account_check,
+      DROP CONSTRAINT IF EXISTS properties_electricity_charge_account_check,
+      DROP CONSTRAINT IF EXISTS properties_payment_order_check;
+
+    ALTER TABLE properties
+      ADD CONSTRAINT properties_water_charge_account_check
+        CHECK (water_charge_account IN ('rent', 'water', 'electricity')),
+      ADD CONSTRAINT properties_electricity_charge_account_check
+        CHECK (electricity_charge_account IN ('rent', 'water', 'electricity')),
+      ADD CONSTRAINT properties_payment_order_check
+        CHECK (payment_order IN ('fixed', 'oldest'));
+
+    -- A property with its own water or electricity account says so.
+    UPDATE properties
+    SET water_charge_account = 'water'
+    WHERE water_charge_account <> 'water'
+      AND EXISTS (
+        SELECT 1 FROM payment_accounts
+        WHERE payment_accounts.property_id = properties.id
+          AND payment_accounts.account_for = 'water'
+          AND payment_accounts.status = 'active'
+      );
+
+    UPDATE properties
+    SET electricity_charge_account = 'electricity'
+    WHERE electricity_charge_account <> 'electricity'
+      AND EXISTS (
+        SELECT 1 FROM payment_accounts
+        WHERE payment_accounts.property_id = properties.id
+          AND payment_accounts.account_for = 'electricity'
+          AND payment_accounts.status = 'active'
+      );
   `);
 
   console.log("[PROPERTIES] Tables initialized.");

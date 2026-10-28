@@ -1112,8 +1112,8 @@ paths:
       description: |
         Owner only. The rent account cannot be removed. Afterwards those charges
         are paid through the rent account. Earlier payments stay on record.
-        If service charges were paid into the removed account, the property's
-        `service_charge_account` goes back to `rent`.
+        Any bills paid into the removed account (`service_charge_account`,
+        `water_charge_account`, `electricity_charge_account`) go back to `rent`.
       security:
         - bearerAuth: []
       parameters:
@@ -3928,6 +3928,28 @@ components:
           description: |
             The account tenants pay service charges and repairs into.
             Anything other than `rent` needs that account's connection ID.
+        water_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          default: rent
+          description: |
+            The account tenants pay water into when the property has no water
+            account of its own. Anything other than `rent` needs that account's
+            connection ID. Its own account always wins.
+        electricity_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          default: rent
+          description: The same for electricity.
+        payment_order:
+          type: string
+          enum: [fixed, oldest]
+          default: fixed
+          description: |
+            How a payment that does not cover every bill paid into that account
+            is shared out. `fixed`: deposits, rent, electricity, water, then
+            service charges and repairs. `oldest`: the bill due first (the
+            fixed order for bills due the same day).
 
     Property:
       type: object
@@ -3970,6 +3992,26 @@ components:
           type: string
           enum: [rent, water, electricity, service]
           description: The account tenants pay service charges and repairs into.
+        water_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          description: The account chosen for water when it has no account of its own.
+        electricity_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          description: The account chosen for electricity when it has no account of its own.
+        charge_accounts:
+          type: object
+          description: The account each kind of bill is paid into right now.
+          properties:
+            rent: { type: string, enum: [rent] }
+            water: { type: string, enum: [rent, water, electricity] }
+            electricity: { type: string, enum: [rent, water, electricity] }
+            service: { type: string, enum: [rent, water, electricity, service] }
+        payment_order:
+          type: string
+          enum: [fixed, oldest]
+          description: How a payment short of every bill is shared out.
         summary:
           type: object
           properties:
@@ -4039,6 +4081,23 @@ components:
           description: |
             The account tenants pay service charges and repairs into.
             The property must have that account.
+        water_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          description: |
+            The account tenants pay water into. Not allowed while the property
+            has its own water account; anything other than `rent` must be an
+            account the property has.
+        electricity_charge_account:
+          type: string
+          enum: [rent, water, electricity]
+          description: The same for electricity.
+        payment_order:
+          type: string
+          enum: [fixed, oldest]
+          description: |
+            `fixed` (deposits, rent, electricity, water, service charges) or
+            `oldest` (the bill due first). Applies to payments from now on.
 
     PropertyResponse:
       type: object

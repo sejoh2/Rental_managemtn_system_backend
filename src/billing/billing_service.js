@@ -34,12 +34,15 @@ const BILLING_TIME_ZONE = "Africa/Nairobi";
   Which charges a payment into each property account may settle,
   in the order they are settled.
 
-  Electricity and water money, including their deposits, goes
-  to its own account when the property has one. Otherwise those
-  charges are settled through the rent account.
+  Electricity, water and service charge money (with their
+  deposits, and repairs with service charges) goes to its own
+  account when the property has one. Otherwise it goes to the
+  account the owner chose on the property: the rent account,
+  or another account the property has.
 
-  Service charges and repairs are settled last, through the
-  account the owner chose for them on the property.
+  The property's payment_order decides the order: 'fixed'
+  (the order below) or 'oldest' (the bill due first, and this
+  order for bills due the same day).
 */
 const charge_priority_order_sql = `
   CASE charge_type
@@ -56,7 +59,52 @@ const charge_priority_order_sql = `
   END
 `;
 
-async function get_payable_charge_types(
+// The order charges are settled in, for a property's payment_order.
+function charge_order_sql(payment_order) {
+  return payment_order === "oldest"
+    ? `due_date ASC, ${charge_priority_order_sql}, id ASC`
+    : `${charge_priority_order_sql}, due_date ASC, id ASC`;
+}
+
+// The charge types each account setting covers.
+const CHARGE_GROUPS = {
+  rent: ["rent_deposit", "rent"],
+  electricity: ["electricity_deposit", "electricity"],
+  water: ["water_deposit", "water"],
+  service: ["service", "repair", "deduction"],
+};
+
+/*
+  The account each kind of bill is paid into, from the
+  property's active accounts and its settings: its own account
+  when connected, else the chosen account when connected, else
+  rent. For example { rent: 'rent', water: 'rent',
+  electricity: 'electricity', service: 'water' }.
+*/
+function resolve_charge_accounts(accounts, settings = {}) {
+  const pick = (own, chosen) => {
+    if (accounts.includes(own)) {
+      return own;
+    }
+
+    return chosen && chosen !== own && accounts.includes(chosen)
+      ? chosen
+      : "rent";
+  };
+
+  return {
+    rent: "rent",
+    water: pick("water", settings.water_charge_account),
+    electricity: pick("electricity", settings.electricity_charge_account),
+    service: pick("service", settings.service_charge_account),
+  };
+}
+
+/*
+  Which charges a payment into the given account may settle,
+  and the order to settle them in.
+*/
+async function get_payment_routing(
   client,
   property_id,
   account_for
@@ -65,6 +113,9 @@ async function get_payable_charge_types(
     `
       SELECT
         properties.service_charge_account,
+        properties.water_charge_account,
+        properties.electricity_charge_account,
+        properties.payment_order,
 
         COALESCE(
           ARRAY_AGG(payment_accounts.account_for)
@@ -87,18 +138,9 @@ async function get_payable_charge_types(
     [property_id]
   );
 
-  const accounts = result.rows[0]?.accounts || [];
-
-  /*
-    The account service charges and repairs are paid into.
-    It falls back to rent if that account is no longer there.
-  */
-  let service_account =
-    result.rows[0]?.service_charge_account || "rent";
-
-  if (!accounts.includes(service_account)) {
-    service_account = "rent";
-  }
+  const property = result.rows[0] || {};
+  const accounts = property.accounts || [];
+  const charge_accounts = resolve_charge_accounts(accounts, property);
 
   const paid_into = [
     "water",
@@ -108,46 +150,32 @@ async function get_payable_charge_types(
     ? account_for
     : "rent";
 
-  const charge_types = [];
-
-  if (paid_into === "water") {
-    charge_types.push("water_deposit", "water");
-  }
-
-  if (paid_into === "electricity") {
-    charge_types.push(
-      "electricity_deposit",
-      "electricity"
-    );
-  }
-
-  if (paid_into === "rent") {
-    charge_types.push("rent_deposit", "rent");
-
-    if (!accounts.includes("electricity")) {
-      charge_types.push(
-        "electricity_deposit",
-        "electricity"
-      );
-    }
-
-    if (!accounts.includes("water")) {
-      charge_types.push("water_deposit", "water");
-    }
-  }
-
   /*
-    Money recorded by hand as "service charges" always
-    settles them, whichever account the property uses.
+    A group is settled by money into the account it is paid
+    into. Money recorded by hand for a kind of bill (say
+    "water") always settles that kind, whichever account the
+    property uses for it.
   */
-  if (
-    paid_into === "service" ||
-    paid_into === service_account
-  ) {
-    charge_types.push("service", "repair", "deduction");
-  }
+  const charge_types = Object.entries(CHARGE_GROUPS)
+    .filter(([group]) =>
+      charge_accounts[group] === paid_into || group === paid_into
+    )
+    .flatMap(([, types]) => types);
 
-  return charge_types;
+  return {
+    charge_types,
+    order_sql: charge_order_sql(property.payment_order),
+  };
+}
+
+async function get_payable_charge_types(
+  client,
+  property_id,
+  account_for
+) {
+  return (
+    await get_payment_routing(client, property_id, account_for)
+  ).charge_types;
 }
 
 /*
@@ -221,7 +249,7 @@ async function apply_tenant_credits(client, tenant_id) {
       credit.remaining_amount
     );
 
-    const charge_types = await get_payable_charge_types(
+    const { charge_types, order_sql } = await get_payment_routing(
       client,
       credit.property_id,
       credit.account_for
@@ -234,10 +262,7 @@ async function apply_tenant_credits(client, tenant_id) {
         WHERE tenant_id = $1
           AND charge_type = ANY($2)
           AND status IN ('open', 'partial')
-        ORDER BY
-          ${charge_priority_order_sql},
-          due_date ASC,
-          id ASC
+        ORDER BY ${order_sql}
         FOR UPDATE
       `,
       [tenant_id, charge_types]
@@ -1378,6 +1403,8 @@ function start_billing_scheduler() {
 module.exports = {
   charge_priority_order_sql,
   get_payable_charge_types,
+  get_payment_routing,
+  resolve_charge_accounts,
   apply_tenant_credits,
   release_charge_payments,
   bill_service_charges,

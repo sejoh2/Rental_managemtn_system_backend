@@ -17,8 +17,7 @@ const {
 } = require("../audit/audit_service");
 
 const {
-  charge_priority_order_sql,
-  get_payable_charge_types,
+  get_payment_routing,
   apply_tenant_credits,
 } = require("../billing/billing_service");
 
@@ -173,7 +172,7 @@ async function apply_payment_to_tenant(
 ) {
   let remaining_amount = Number(payment.amount);
 
-  const priorities = await get_payable_charge_types(
+  const { charge_types: priorities, order_sql } = await get_payment_routing(
     client,
     tenant.property_id,
     payment.account_for
@@ -186,10 +185,7 @@ async function apply_payment_to_tenant(
       WHERE tenant_id = $1
         AND charge_type = ANY($2)
         AND status IN ('open', 'partial')
-      ORDER BY
-        ${charge_priority_order_sql},
-        due_date ASC,
-        id ASC
+      ORDER BY ${order_sql}
       FOR UPDATE
     `,
     [
