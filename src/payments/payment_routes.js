@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 
 const payment_controller = require("./payment_controller");
 
@@ -16,6 +17,22 @@ const {
 } = require("../caretakers/caretaker_acting");
 
 const router = express.Router();
+
+/*
+  Per network address, far above normal use. The Record payment form
+  looks for possible duplicates while the owner types.
+*/
+const limit = (max) =>
+  rateLimit({
+    windowMs: 60 * 1000,
+    max,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { success: false, error: "Too many requests. Please wait a minute." },
+  });
+
+const dismiss_limiter = limit(30);
+const duplicates_limiter = limit(120);
 
 /*
   Daraja callback URLs, each with the payment account's secret:
@@ -88,12 +105,14 @@ router.post(
 // "Not a tenant payment", and putting it back.
 router.post(
   "/payments/:payment_id/dismiss",
+  dismiss_limiter,
   guard,
   payment_controller.dismiss_payment
 );
 
 router.post(
   "/payments/:payment_id/restore",
+  dismiss_limiter,
   guard,
   payment_controller.restore_payment
 );
@@ -131,6 +150,7 @@ router.post(
 */
 router.get(
   "/tenants/:tenant_id/payments/possible-duplicates",
+  duplicates_limiter,
   manual_payment_guard,
   payment_controller.list_possible_duplicates
 );
