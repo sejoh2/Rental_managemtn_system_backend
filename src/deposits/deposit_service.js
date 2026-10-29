@@ -134,6 +134,20 @@ function public_settlement(settlement) {
     refund_due: Number(settlement.refund_due),
     tenant_owes: Number(settlement.tenant_owes),
 
+    /*
+      What the former tenant paid after the settlement above
+      what they owed; it is part of refund_due. And how much of
+      the refund has been paid out, and what is still to pay.
+    */
+    added_after_settlement: Number(
+      settlement.added_after_settlement || 0
+    ),
+    refund_paid_amount: Number(settlement.refund_paid_amount || 0),
+    refund_outstanding: money(
+      Number(settlement.refund_due) -
+        Number(settlement.refund_paid_amount || 0)
+    ),
+
     groups: settlement.breakdown.groups || [],
 
     confirmed_at: settlement.confirmed_at,
@@ -1053,9 +1067,22 @@ async function record_refund(
     );
   }
 
-  if (Number(settlement.refund_due) <= 0) {
+  /*
+    The refund is paid in full. When the former tenant paid more
+    after it was paid out, what they are owed back again can be
+    recorded the same way.
+  */
+  const outstanding = money(
+    Number(settlement.refund_due) -
+      Number(settlement.refund_paid_amount || 0)
+  );
+
+  if (outstanding <= 0) {
     throw service_error(
-      "No refund is due to this tenant."
+      settlement.refund_paid_on
+        ? "This refund has already been recorded as paid."
+        : "No refund is due to this tenant.",
+      settlement.refund_paid_on ? 409 : 400
     );
   }
 
@@ -1067,9 +1094,10 @@ async function record_refund(
         refund_method = $2,
         refund_reference = $3,
         refund_recorded_by = $4,
-        refund_recorded_at = CURRENT_TIMESTAMP
+        refund_recorded_at = CURRENT_TIMESTAMP,
+        refund_paid_amount = refund_due
       WHERE id = $5
-        AND refund_paid_on IS NULL
+        AND refund_paid_amount = $6::NUMERIC
       RETURNING id
     `,
     [
@@ -1078,6 +1106,7 @@ async function record_refund(
       data.reference || null,
       owner.user_id,
       settlement.id,
+      Number(settlement.refund_paid_amount || 0).toFixed(2),
     ]
   );
 
@@ -1096,7 +1125,7 @@ async function record_refund(
     metadata: {
       property_id: tenant.property_id,
       unit_number: tenant.unit_number,
-      amount: Number(settlement.refund_due),
+      amount: outstanding,
       paid_on: data.paid_on,
       method: data.method,
       reference: data.reference || null,

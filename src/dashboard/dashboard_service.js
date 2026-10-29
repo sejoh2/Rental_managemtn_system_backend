@@ -1,5 +1,9 @@
 const db = require("../config/db");
 
+const {
+  get_owed_summary,
+} = require("../reports/owed_service");
+
 /*
   Figures for the owner's Dashboard home, the "needs attention"
   list behind the bell, and the top-bar search.
@@ -159,41 +163,10 @@ async function get_home(owner, filters) {
   const collected_last_month = rent_by_month[4].amount;
 
   /*
-    Rent that tenants living there now still owe.
+    What tenants living there now owe, and how much of it is
+    overdue: the same figures as Reports (reports/owed_service.js).
   */
-  const outstanding = await db.query(
-    `
-      SELECT
-        COALESCE(
-          SUM(
-            tenant_charges.amount_due -
-            tenant_charges.amount_paid
-          ),
-          0
-        ) AS amount,
-
-        COUNT(DISTINCT tenant_charges.unit_id) AS units
-
-      FROM tenant_charges
-
-      INNER JOIN tenants
-        ON tenants.id = tenant_charges.tenant_id
-
-      INNER JOIN properties
-        ON properties.id = tenant_charges.property_id
-
-      WHERE tenant_charges.owner_id = $1
-        AND tenant_charges.charge_type = 'rent'
-        AND tenant_charges.status IN ('open', 'partial')
-        AND tenants.status IN ('active', 'notice_given')
-        AND properties.status <> 'archived'
-        AND (
-          $2::TEXT IS NULL
-          OR tenant_charges.property_id = $2
-        )
-    `,
-    values
-  );
+  const owed = await get_owed_summary(db, owner_id, property_id);
 
   const occupancy = await db.query(
     `
@@ -461,14 +434,15 @@ async function get_home(owner, filters) {
             )
           : null,
 
-      outstanding: as_number(
-        outstanding.rows[0].amount
-      ),
-
-      units_in_arrears: Number(
-        outstanding.rows[0].units
-      ),
+      /*
+        Kept for older screens: what current tenants owe, all
+        bills, and how many of them have something overdue.
+      */
+      outstanding: owed.owed,
+      units_in_arrears: owed.tenants_overdue,
     },
+
+    owed,
 
     occupancy: {
       total_units,

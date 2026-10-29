@@ -26,6 +26,22 @@ const service_charge_account_options = [
   "service",
 ];
 
+// Where water and electricity are paid when they have no account of their own.
+const utility_account_options = [
+  "rent",
+  "water",
+  "electricity",
+];
+
+const payment_order_options = ["fixed", "oldest"];
+
+// The setting for each kind of bill that can use another account.
+const CHARGE_ACCOUNT_SETTINGS = [
+  ["water_charge_account", "water", "water"],
+  ["electricity_charge_account", "electricity", "electricity"],
+  ["service_charge_account", "service", "service charges"],
+];
+
 const mpesa_account_schema = z.object({
   provider_code: z.literal("mpesa"),
 
@@ -187,6 +203,17 @@ const create_property_schema = z.object({
   service_charge_account: z.enum(
     service_charge_account_options
   ).default("rent"),
+
+  /*
+    The account water and electricity are paid into when
+    they have no account of their own.
+  */
+  water_charge_account: z.enum(utility_account_options).default("rent"),
+
+  electricity_charge_account: z.enum(utility_account_options).default("rent"),
+
+  // How a payment that does not cover every bill is shared out.
+  payment_order: z.enum(payment_order_options).default("fixed"),
 }).superRefine((data, context) => {
   const connection_ids = [
     data.rent_connection_id,
@@ -195,16 +222,21 @@ const create_property_schema = z.object({
     data.service_connection_id,
   ].filter(Boolean);
 
-  if (
-    data.service_charge_account !== "rent" &&
-    !data[`${data.service_charge_account}_connection_id`]
-  ) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["service_charge_account"],
-      message:
-        "Connect that account first, or have service charges paid into the rent account.",
-    });
+  for (const [field, own, label] of CHARGE_ACCOUNT_SETTINGS) {
+    const chosen = data[field];
+
+    // Their own account, when connected, is used whatever is chosen.
+    if (data[`${own}_connection_id`] || chosen === "rent") {
+      continue;
+    }
+
+    if (!data[`${chosen}_connection_id`]) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `Connect that account first, or have ${label} paid into the rent account.`,
+      });
+    }
   }
 
   if (
@@ -281,6 +313,12 @@ const update_property_schema = z.object({
     service_charge_account_options
   ).optional(),
 
+  water_charge_account: z.enum(utility_account_options).optional(),
+
+  electricity_charge_account: z.enum(utility_account_options).optional(),
+
+  payment_order: z.enum(payment_order_options).optional(),
+
   sms_sender_id: z.string()
     .trim()
     .max(50)
@@ -342,6 +380,7 @@ function validate(schema, data) {
 }
 
 module.exports = {
+  CHARGE_ACCOUNT_SETTINGS,
   validate_connect_account: (data) =>
     validate(connect_account_schema, data),
 

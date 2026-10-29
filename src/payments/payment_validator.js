@@ -45,6 +45,35 @@ const manual_payment_schema = z.object({
     .max(5000)
     .nullable()
     .optional(),
+
+  /*
+    Kodi found an unmatched M-Pesa payment that may be this same
+    money, and the owner says it is a different payment: why.
+  */
+  duplicate_override_reason: z.string()
+    .trim()
+    .min(3)
+    .max(500)
+    .nullable()
+    .optional(),
+});
+
+const possible_duplicates_schema = z.object({
+  amount: z.coerce.number()
+    .positive()
+    .optional(),
+
+  reference: z.string()
+    .trim()
+    .max(200)
+    .optional(),
+});
+
+const dismiss_payment_schema = z.object({
+  reason: z.string()
+    .trim()
+    .min(3)
+    .max(500),
 });
 
 const export_payments_schema = z.object({
@@ -55,6 +84,7 @@ const export_payments_schema = z.object({
     "matched",
     "unmatched",
     "reversed",
+    "dismissed",
   ]).optional(),
 
   from_date: z.string()
@@ -124,6 +154,12 @@ module.exports = {
 
   validate_manual_payment: (data) =>
     validate(manual_payment_schema, data),
+
+  validate_possible_duplicates: (data) =>
+    validate(possible_duplicates_schema, data),
+
+  validate_dismiss_payment: (data) =>
+    validate(dismiss_payment_schema, data),
 
   validate_sandbox_simulation: (data) =>
     validate(sandbox_simulation_schema, data),

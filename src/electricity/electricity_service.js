@@ -1,5 +1,7 @@
 const db = require("../config/db");
 
+const { sum_money } = require("../utils/money");
+
 const {
   log_audit,
 } = require("../audit/audit_service");
@@ -368,9 +370,8 @@ async function save_bills(
         metadata: {
           period: data.period,
           bills: saved,
-          total: saved.reduce(
-            (total, bill) => total + bill.amount,
-            0
+          total: sum_money(
+            saved.map((bill) => bill.amount)
           ),
         },
         ip_address,

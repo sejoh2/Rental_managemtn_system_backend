@@ -1,6 +1,13 @@
 const db = require("../config/db");
 
 const {
+  to_cents,
+  from_cents,
+  cents_to_number,
+  sum_money,
+} = require("../utils/money");
+
+const {
   log_audit,
 } = require("../audit/audit_service");
 
@@ -34,12 +41,15 @@ const BILLING_TIME_ZONE = "Africa/Nairobi";
   Which charges a payment into each property account may settle,
   in the order they are settled.
 
-  Electricity and water money, including their deposits, goes
-  to its own account when the property has one. Otherwise those
-  charges are settled through the rent account.
+  Electricity, water and service charge money (with their
+  deposits, and repairs with service charges) goes to its own
+  account when the property has one. Otherwise it goes to the
+  account the owner chose on the property: the rent account,
+  or another account the property has.
 
-  Service charges and repairs are settled last, through the
-  account the owner chose for them on the property.
+  The property's payment_order decides the order: 'fixed'
+  (the order below) or 'oldest' (the bill due first, and this
+  order for bills due the same day).
 */
 const charge_priority_order_sql = `
   CASE charge_type
@@ -56,7 +66,52 @@ const charge_priority_order_sql = `
   END
 `;
 
-async function get_payable_charge_types(
+// The order charges are settled in, for a property's payment_order.
+function charge_order_sql(payment_order) {
+  return payment_order === "oldest"
+    ? `due_date ASC, ${charge_priority_order_sql}, id ASC`
+    : `${charge_priority_order_sql}, due_date ASC, id ASC`;
+}
+
+// The charge types each account setting covers.
+const CHARGE_GROUPS = {
+  rent: ["rent_deposit", "rent"],
+  electricity: ["electricity_deposit", "electricity"],
+  water: ["water_deposit", "water"],
+  service: ["service", "repair", "deduction"],
+};
+
+/*
+  The account each kind of bill is paid into, from the
+  property's active accounts and its settings: its own account
+  when connected, else the chosen account when connected, else
+  rent. For example { rent: 'rent', water: 'rent',
+  electricity: 'electricity', service: 'water' }.
+*/
+function resolve_charge_accounts(accounts, settings = {}) {
+  const pick = (own, chosen) => {
+    if (accounts.includes(own)) {
+      return own;
+    }
+
+    return chosen && chosen !== own && accounts.includes(chosen)
+      ? chosen
+      : "rent";
+  };
+
+  return {
+    rent: "rent",
+    water: pick("water", settings.water_charge_account),
+    electricity: pick("electricity", settings.electricity_charge_account),
+    service: pick("service", settings.service_charge_account),
+  };
+}
+
+/*
+  Which charges a payment into the given account may settle,
+  and the order to settle them in.
+*/
+async function get_payment_routing(
   client,
   property_id,
   account_for
@@ -65,6 +120,9 @@ async function get_payable_charge_types(
     `
       SELECT
         properties.service_charge_account,
+        properties.water_charge_account,
+        properties.electricity_charge_account,
+        properties.payment_order,
 
         COALESCE(
           ARRAY_AGG(payment_accounts.account_for)
@@ -87,18 +145,9 @@ async function get_payable_charge_types(
     [property_id]
   );
 
-  const accounts = result.rows[0]?.accounts || [];
-
-  /*
-    The account service charges and repairs are paid into.
-    It falls back to rent if that account is no longer there.
-  */
-  let service_account =
-    result.rows[0]?.service_charge_account || "rent";
-
-  if (!accounts.includes(service_account)) {
-    service_account = "rent";
-  }
+  const property = result.rows[0] || {};
+  const accounts = property.accounts || [];
+  const charge_accounts = resolve_charge_accounts(accounts, property);
 
   const paid_into = [
     "water",
@@ -108,46 +157,32 @@ async function get_payable_charge_types(
     ? account_for
     : "rent";
 
-  const charge_types = [];
-
-  if (paid_into === "water") {
-    charge_types.push("water_deposit", "water");
-  }
-
-  if (paid_into === "electricity") {
-    charge_types.push(
-      "electricity_deposit",
-      "electricity"
-    );
-  }
-
-  if (paid_into === "rent") {
-    charge_types.push("rent_deposit", "rent");
-
-    if (!accounts.includes("electricity")) {
-      charge_types.push(
-        "electricity_deposit",
-        "electricity"
-      );
-    }
-
-    if (!accounts.includes("water")) {
-      charge_types.push("water_deposit", "water");
-    }
-  }
-
   /*
-    Money recorded by hand as "service charges" always
-    settles them, whichever account the property uses.
+    A group is settled by money into the account it is paid
+    into. Money recorded by hand for a kind of bill (say
+    "water") always settles that kind, whichever account the
+    property uses for it.
   */
-  if (
-    paid_into === "service" ||
-    paid_into === service_account
-  ) {
-    charge_types.push("service", "repair", "deduction");
-  }
+  const charge_types = Object.entries(CHARGE_GROUPS)
+    .filter(([group]) =>
+      charge_accounts[group] === paid_into || group === paid_into
+    )
+    .flatMap(([, types]) => types);
 
-  return charge_types;
+  return {
+    charge_types,
+    order_sql: charge_order_sql(property.payment_order),
+  };
+}
+
+async function get_payable_charge_types(
+  client,
+  property_id,
+  account_for
+) {
+  return (
+    await get_payment_routing(client, property_id, account_for)
+  ).charge_types;
 }
 
 /*
@@ -214,14 +249,14 @@ async function apply_tenant_credits(client, tenant_id) {
     [tenant_id]
   );
 
-  let total_applied = 0;
+  // In whole cents, so what is used and what is left add up exactly.
+  let total_applied_cents = 0;
 
   for (const credit of credits_result.rows) {
-    let remaining_amount = Number(
-      credit.remaining_amount
-    );
+    const starting_cents = to_cents(credit.remaining_amount);
+    let remaining_cents = starting_cents;
 
-    const charge_types = await get_payable_charge_types(
+    const { charge_types, order_sql } = await get_payment_routing(
       client,
       credit.property_id,
       credit.account_for
@@ -234,31 +269,27 @@ async function apply_tenant_credits(client, tenant_id) {
         WHERE tenant_id = $1
           AND charge_type = ANY($2)
           AND status IN ('open', 'partial')
-        ORDER BY
-          ${charge_priority_order_sql},
-          due_date ASC,
-          id ASC
+        ORDER BY ${order_sql}
         FOR UPDATE
       `,
       [tenant_id, charge_types]
     );
 
     for (const charge of charges_result.rows) {
-      if (remaining_amount <= 0) {
+      if (remaining_cents <= 0) {
         break;
       }
 
-      const outstanding =
-        Number(charge.amount_due) -
-        Number(charge.amount_paid);
+      const outstanding_cents =
+        to_cents(charge.amount_due) -
+        to_cents(charge.amount_paid);
 
-      if (outstanding <= 0) {
+      if (outstanding_cents <= 0) {
         continue;
       }
 
-      const allocated_amount = Math.min(
-        remaining_amount,
-        outstanding
+      const allocated = from_cents(
+        Math.min(remaining_cents, outstanding_cents)
       );
 
       await client.query(
@@ -268,7 +299,7 @@ async function apply_tenant_credits(client, tenant_id) {
             tenant_charge_id,
             amount
           )
-          VALUES ($1,$2,$3)
+          VALUES ($1,$2,$3::NUMERIC)
           ON CONFLICT (payment_id, tenant_charge_id)
           DO UPDATE SET
             amount =
@@ -278,7 +309,7 @@ async function apply_tenant_credits(client, tenant_id) {
         [
           credit.source_payment_id,
           charge.id,
-          allocated_amount,
+          allocated,
         ]
       );
 
@@ -286,37 +317,34 @@ async function apply_tenant_credits(client, tenant_id) {
         `
           UPDATE tenant_charges
           SET
-            amount_paid = amount_paid + $1,
+            amount_paid = amount_paid + $1::NUMERIC,
             status = CASE
-              WHEN amount_paid + $1 >= amount_due
+              WHEN amount_paid + $1::NUMERIC >= amount_due
               THEN 'paid'
               ELSE 'partial'
             END
           WHERE id = $2
         `,
-        [allocated_amount, charge.id]
+        [allocated, charge.id]
       );
 
-      remaining_amount -= allocated_amount;
-      total_applied += allocated_amount;
+      remaining_cents -= to_cents(allocated);
+      total_applied_cents += to_cents(allocated);
     }
 
-    if (
-      remaining_amount !==
-      Number(credit.remaining_amount)
-    ) {
+    if (remaining_cents !== starting_cents) {
       await client.query(
         `
           UPDATE tenant_credits
-          SET remaining_amount = $1
+          SET remaining_amount = $1::NUMERIC
           WHERE id = $2
         `,
-        [remaining_amount, credit.id]
+        [from_cents(remaining_cents), credit.id]
       );
     }
   }
 
-  return total_applied;
+  return cents_to_number(total_applied_cents);
 }
 
 /*
@@ -925,10 +953,8 @@ async function run_monthly_billing() {
         billed_rows[0]?.billing_period || null,
       charges_created: billed_rows.length,
       tenants_billed: tenant_ids.length,
-      total_billed: billed_rows.reduce(
-        (total, row) =>
-          total + Number(row.amount_due),
-        0
+      total_billed: sum_money(
+        billed_rows.map((row) => row.amount_due)
       ),
       credit_applied,
     };
@@ -956,10 +982,8 @@ async function run_monthly_billing() {
           tenants_billed: new Set(
             owner_rows.map((row) => row.tenant_id)
           ).size,
-          total_billed: owner_rows.reduce(
-            (total, row) =>
-              total + Number(row.amount_due),
-            0
+          total_billed: sum_money(
+            owner_rows.map((row) => row.amount_due)
           ),
         },
       });
@@ -983,7 +1007,8 @@ async function release_charge_payments(
   charge,
   amount_to_release
 ) {
-  let remaining_to_release = amount_to_release;
+  // In whole cents: a tiny remainder once made the credit fail.
+  let remaining_cents = to_cents(amount_to_release);
 
   const allocations_result = await client.query(
     `
@@ -997,16 +1022,18 @@ async function release_charge_payments(
   );
 
   for (const allocation of allocations_result.rows) {
-    if (remaining_to_release <= 0) {
+    if (remaining_cents <= 0) {
       break;
     }
 
-    const released_amount = Math.min(
-      remaining_to_release,
-      Number(allocation.amount)
+    const allocation_cents = to_cents(allocation.amount);
+    const released_cents = Math.min(
+      remaining_cents,
+      allocation_cents
     );
+    const released_amount = from_cents(released_cents);
 
-    if (released_amount >= Number(allocation.amount)) {
+    if (released_cents >= allocation_cents) {
       await client.query(
         `
           DELETE FROM payment_allocations
@@ -1018,7 +1045,7 @@ async function release_charge_payments(
       await client.query(
         `
           UPDATE payment_allocations
-          SET amount = amount - $1
+          SET amount = amount - $1::NUMERIC
           WHERE id = $2
         `,
         [released_amount, allocation.id]
@@ -1034,7 +1061,7 @@ async function release_charge_payments(
           original_amount,
           remaining_amount
         )
-        VALUES ($1,$2,$3,$4,$4)
+        VALUES ($1,$2,$3,$4::NUMERIC,$4::NUMERIC)
         ON CONFLICT (source_payment_id)
         DO UPDATE SET
           original_amount =
@@ -1052,7 +1079,7 @@ async function release_charge_payments(
       ]
     );
 
-    remaining_to_release -= released_amount;
+    remaining_cents -= released_cents;
   }
 }
 
@@ -1280,11 +1307,14 @@ async function adjust_move_out_charges(
       target_amount
     );
 
-    if (amount_paid > new_amount_paid) {
+    const released_cents =
+      to_cents(amount_paid) - to_cents(new_amount_paid);
+
+    if (released_cents > 0) {
       await release_charge_payments(
         client,
         charge,
-        amount_paid - new_amount_paid
+        from_cents(released_cents)
       );
     }
 
@@ -1320,7 +1350,7 @@ async function adjust_move_out_charges(
       description: charge.description,
       previous_amount: amount_due,
       amount: target_amount,
-      credited_to_tenant: amount_paid - new_amount_paid,
+      credited_to_tenant: cents_to_number(released_cents),
     });
   }
 
@@ -1378,6 +1408,8 @@ function start_billing_scheduler() {
 module.exports = {
   charge_priority_order_sql,
   get_payable_charge_types,
+  get_payment_routing,
+  resolve_charge_accounts,
   apply_tenant_credits,
   release_charge_payments,
   bill_service_charges,

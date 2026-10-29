@@ -459,6 +459,72 @@ async function init_payment_tables() {
     ALTER TABLE payments
       ADD COLUMN IF NOT EXISTS reverse_reason TEXT;
 
+    /*
+      'dismissed': an M-Pesa payment the owner marked "Not a
+      tenant payment" (a wrong number, their own money), with a
+      reason. It leaves the unmatched list and the totals, and
+      can be put back. Added 2026-10-29.
+    */
+    ALTER TABLE payments
+      DROP CONSTRAINT IF EXISTS payments_status_check;
+
+    ALTER TABLE payments
+      ADD CONSTRAINT payments_status_check
+      CHECK (
+        status IN (
+          'unmatched',
+          'matched',
+          'reversed',
+          'failed',
+          'dismissed'
+        )
+      );
+
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
+
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS dismissed_by record_id
+      REFERENCES users(user_id)
+      ON DELETE SET NULL;
+
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS dismiss_reason TEXT;
+
+    /*
+      What a former tenant's payment added to the refund owed to
+      them, when their deposits were already settled.
+    */
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS added_to_refund NUMERIC(12,2)
+      NOT NULL DEFAULT 0;
+
+    /*
+      When Kodi heard of an M-Pesa payment. received_at is when
+      the tenant paid (M-Pesa's own time), so a payment made at
+      23:58 on the 31st counts in that month even when the notice
+      arrives after midnight.
+    */
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
+    /*
+      A hand-recorded payment saved although Kodi showed an
+      unmatched M-Pesa payment that looked like the same money:
+      why the owner said it was a different payment.
+    */
+    ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS duplicate_override_reason TEXT;
+
+    /*
+      Bills paid in full whose status was left at 'partial' by an
+      old rounding fault (150.15 + 256.01 against 406.16).
+    */
+    UPDATE tenant_charges
+    SET status = 'paid'
+    WHERE status = 'partial'
+      AND amount_paid >= amount_due;
+
     ALTER TABLE payments
       DROP CONSTRAINT IF EXISTS payments_account_for_check;
 
