@@ -154,11 +154,16 @@ function report_sections(report, report_type) {
     });
 
     sections.push({
-      title: "Arrears by property",
+      title: "Owed by tenants",
       lines: [
         [
-          "Owed by current tenants",
+          "Owed by current tenants (all unpaid bills)",
           report.arrears.total_arrears,
+          true,
+        ],
+        [
+          "Of which overdue (past the due date)",
+          report.arrears.total_overdue,
           true,
         ],
         [
@@ -171,14 +176,16 @@ function report_sections(report, report_type) {
         headers: [
           "Property",
           "Current tenants owe",
+          "Overdue",
           "Tenants",
           "Former tenants owe",
           "Tenants",
         ],
-        money_columns: [1, 3],
+        money_columns: [1, 2, 4],
         rows: report.arrears.by_property.map((item) => [
           item.property_name,
           item.arrears_amount,
+          item.overdue_amount,
           item.tenants_in_arrears,
           item.former_tenant_arrears,
           item.former_tenants_in_arrears,
@@ -195,15 +202,17 @@ function report_sections(report, report_type) {
           "Tenant",
           "Status",
           "Owes",
+          "Overdue",
           "Oldest unpaid bill due",
         ],
-        money_columns: [4],
+        money_columns: [4, 5],
         rows: report.details.arrears.map((row) => [
           row.property_name,
           row.unit_number,
           row.full_name,
           tenant_state(row),
           row.balance,
+          row.overdue,
           format_day(row.oldest_due_date),
         ]),
       },
@@ -693,95 +702,68 @@ function stream_tenant_statement_pdf(res, statement) {
     period_text(statement.period)
   );
 
-  write_key_value(
-    document,
-    "Balance owed today",
-    format_money(statement.outstanding_balance)
-  );
+  /*
+    The statement is a running account: what was brought forward,
+    each bill and payment with the balance after it, and the
+    balance at the end. A negative balance is money paid ahead.
+  */
+  const ledger = statement.ledger;
 
-  write_key_value(
-    document,
-    "Credit held",
-    format_money(statement.credit_balance)
-  );
+  const signed = (value) =>
+    value < 0
+      ? `${format_money(-value)} in credit`
+      : format_money(value);
 
-  const charges = statement.charges.filter(
-    (charge) => charge.status !== "void"
-  );
+  write_key_value(document, "Balance today", signed(ledger.balance_today));
 
-  section_title(document, "Charges");
+  write_key_value(document, "Owed today", format_money(ledger.owed));
+
+  for (const credit of ledger.credits) {
+    write_key_value(
+      document,
+      "Credit held",
+      `${format_money(credit.amount)} for ${credit.pays} bills`
+    );
+  }
+
+  if (ledger.refund_outstanding > 0) {
+    write_key_value(
+      document,
+      "Refund still due to the tenant",
+      format_money(ledger.refund_outstanding)
+    );
+  }
+
+  section_title(document, "Statement");
+
+  const blank_or_money = (value) =>
+    value === null || value === undefined ? "" : format_money(value);
 
   write_table(document, {
-    headers: [
-      "Charge",
-      "Due",
-      "Amount",
-      "Paid",
-      "Still owed",
-    ],
-    money_columns: [2, 3, 4],
+    headers: ["Date", "Details", "Billed", "Paid", "Balance"],
     rows: [
-      ...charges.map((charge) => [
-        charge_label({
-          ...charge,
-          billing_period: charge.billing_period_text,
-        }),
-        format_day(charge.due_date_text),
-        charge.amount_due,
-        charge.amount_paid,
-        charge.balance,
+      [
+        format_day(statement.period.start_date),
+        "Brought forward",
+        "",
+        "",
+        signed(ledger.opening_balance),
+      ],
+      ...ledger.lines.map((line) => [
+        format_day(line.date),
+        line.description,
+        blank_or_money(line.billed),
+        blank_or_money(line.paid),
+        signed(line.balance),
       ]),
-      ...(charges.length
-        ? [
-            [
-              "Total",
-              "",
-              charges.reduce(
-                (total, charge) =>
-                  total + charge.amount_due,
-                0
-              ),
-              charges.reduce(
-                (total, charge) =>
-                  total + charge.amount_paid,
-                0
-              ),
-              charges.reduce(
-                (total, charge) =>
-                  total + charge.balance,
-                0
-              ),
-            ],
-          ]
-        : []),
+      [
+        format_day(statement.period.end_date),
+        "Balance at the end of the period",
+        format_money(ledger.total_billed),
+        format_money(ledger.total_paid),
+        signed(ledger.closing_balance),
+      ],
     ],
-  });
-
-  section_title(document, "Payments");
-
-  write_table(document, {
-    headers: [
-      "Date",
-      "Amount",
-      "Method",
-      "Reference",
-      "Paid for",
-    ],
-    money_columns: [1],
-    rows: statement.payments.map((payment) => [
-      format_day(payment.received_on),
-      payment.amount,
-      method_labels[payment.payment_method] ||
-        payment.payment_method,
-      payment.provider_transaction_id ||
-        payment.reference ||
-        "-",
-      payment.applied_to.length
-        ? payment.applied_to
-            .map((item) => charge_label(item))
-            .join(", ")
-        : "Held as credit",
-    ]),
   });
 
   const settlement = statement.deposit_settlement;

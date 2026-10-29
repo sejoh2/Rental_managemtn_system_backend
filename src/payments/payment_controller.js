@@ -14,6 +14,8 @@ const {
   validate_match_payment,
   validate_reverse_payment,
   validate_manual_payment,
+  validate_possible_duplicates,
+  validate_dismiss_payment,
   validate_sandbox_simulation,
   validate_payment_id,
   validate_tenant_id,
@@ -273,6 +275,70 @@ async function record_manual_payment(req, res, next) {
   }
 }
 
+async function list_possible_duplicates(req, res, next) {
+  try {
+    const tenant_id = validate_tenant_id(
+      req.params.tenant_id
+    );
+
+    const query = validate_possible_duplicates(req.query);
+
+    return res.status(200).json({
+      success: true,
+      data: await payment_service.list_possible_duplicates(
+        req.user,
+        tenant_id,
+        query
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function dismiss_payment(req, res, next) {
+  try {
+    const payment_id = validate_payment_id(
+      req.params.payment_id
+    );
+
+    const { reason } = validate_dismiss_payment(req.body);
+
+    return res.status(200).json({
+      success: true,
+      message: "Marked as not a tenant payment.",
+      data: await payment_service.dismiss_payment(
+        req.user,
+        payment_id,
+        reason,
+        req.ip
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function restore_payment(req, res, next) {
+  try {
+    const payment_id = validate_payment_id(
+      req.params.payment_id
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "The payment is back under unmatched payments.",
+      data: await payment_service.restore_payment(
+        req.user,
+        payment_id,
+        req.ip
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function simulate_sandbox_payment(
   req,
   res,
@@ -328,6 +394,9 @@ module.exports = {
   match_payment,
   reverse_payment,
   record_manual_payment,
+  list_possible_duplicates,
+  dismiss_payment,
+  restore_payment,
   list_tenant_payments,
   simulate_sandbox_payment,
 };

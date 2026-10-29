@@ -1537,6 +1537,12 @@ paths:
         Takes the money back off every charge the payment settled and removes any
         credit it left. A manually recorded payment stays on record as `reversed`.
         An M-Pesa payment returns to `unmatched` so it can be assigned again.
+
+        Refused with 409 when the tenant's deposit settlement was worked out from
+        this payment (`details.code` `reopen_settlement_first`: reopen the
+        settlement first), or once the refund it fed has been paid out
+        (`refund_paid`). A payment made after the settlement may be reversed; what
+        it added to the refund is taken back.
       security:
         - bearerAuth: []
       parameters:
@@ -1576,10 +1582,99 @@ paths:
               schema:
                 $ref: "#/components/schemas/PaymentListResponse"
 
+  /api/payments/{payment_id}/dismiss:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Mark an unmatched payment as not a tenant payment
+      description: |
+        For M-Pesa money that is no tenant's (a wrong number, the owner's own
+        money). It leaves the unmatched list and the money received. Audited as
+        PAYMENT_DISMISSED.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+      responses:
+        "200":
+          description: Marked as not a tenant payment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+        "409":
+          description: Only an unmatched payment can be marked
+
+  /api/payments/{payment_id}/restore:
+    post:
+      tags: [Step 6 - Payments]
+      summary: Put a dismissed payment back under unmatched payments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Back under unmatched payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
+  /api/tenants/{tenant_id}/payments/possible-duplicates:
+    get:
+      tags: [Step 6 - Payments]
+      summary: Unmatched M-Pesa payments that may be the money being recorded by hand
+      description: |
+        For the Record payment form. `already_recorded` is set when the receipt
+        number is already counted for someone. Each candidate has `reasons`:
+        `receipt` (its receipt is the one typed), `phone` (from the tenant's
+        number or one they paid from before), `amount` (same amount, last 30 days).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - name: amount
+          in: query
+          schema:
+            type: number
+        - name: reference
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Possible duplicates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDataResponse"
+
   /api/tenants/{tenant_id}/payments/manual:
     post:
       tags: [Step 6 - Payments]
       summary: Record manual tenant payment
+      description: |
+        With `payment_method` `mpesa` the M-Pesa receipt number is required in
+        `reference` (422, `details.code` `receipt_required`). Refused with 409
+        when that receipt is already counted (`receipt_recorded`) or is an
+        unmatched payment (`unmatched_receipt`: match that one instead). When an
+        unmatched payment came from the tenant's number, 409
+        `possible_duplicate` (with `details.candidates`) unless
+        `duplicate_override_reason` says why this is a different payment.
+        A former tenant's money pays whatever they still owe; after their deposits
+        are settled, what is left is added to the refund owed to them.
       security:
         - bearerAuth: []
       parameters:
@@ -4358,6 +4453,10 @@ components:
         notes:
           type: string
           nullable: true
+        duplicate_override_reason:
+          type: string
+          nullable: true
+          description: Why this is a different payment from the unmatched M-Pesa payment Kodi showed.
 
     SandboxSimulationRequest:
       type: object

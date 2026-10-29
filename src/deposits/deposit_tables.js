@@ -99,6 +99,24 @@ async function init_deposit_tables() {
         DEFAULT CURRENT_TIMESTAMP
     );
 
+    /*
+      Added 2026-10-29. What former tenants paid after the
+      settlement above what they owed (it is in refund_due too),
+      and how much of the refund has been paid out.
+    */
+    ALTER TABLE deposit_settlements
+      ADD COLUMN IF NOT EXISTS added_after_settlement
+      NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+    ALTER TABLE deposit_settlements
+      ADD COLUMN IF NOT EXISTS refund_paid_amount
+      NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+    UPDATE deposit_settlements
+    SET refund_paid_amount = refund_due
+    WHERE refund_paid_on IS NOT NULL
+      AND refund_paid_amount = 0;
+
     CREATE INDEX IF NOT EXISTS
       idx_deposit_settlements_owner
       ON deposit_settlements(owner_id, confirmed_at DESC);

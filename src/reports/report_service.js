@@ -1,6 +1,15 @@
 const db = require("../config/db");
 
 const {
+  OVERDUE_SQL,
+  get_owed_summary,
+} = require("./owed_service");
+
+const {
+  build_ledger,
+} = require("./statement_ledger");
+
+const {
   get_caretaker_property_access,
 } = require(
   "../caretakers/caretaker_access_service"
@@ -266,6 +275,32 @@ async function get_arrears_by_property(
             )
           ) AS tenants_in_arrears,
 
+        /*
+          The part of it past its due date.
+        */
+        COALESCE(
+          SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ) FILTER (
+            WHERE tenants.status IN (
+              'active',
+              'notice_given'
+            )
+            AND ${OVERDUE_SQL}
+          ),
+          0
+        ) AS overdue_amount,
+
+        COUNT(DISTINCT tenant_charges.tenant_id)
+          FILTER (
+            WHERE tenants.status IN (
+              'active',
+              'notice_given'
+            )
+            AND ${OVERDUE_SQL}
+          ) AS tenants_overdue,
+
         COALESCE(
           SUM(
             tenant_charges.amount_due -
@@ -334,6 +369,9 @@ async function get_arrears_by_property(
     tenants_in_arrears: Number(
       row.tenants_in_arrears
     ),
+
+    overdue_amount: as_number(row.overdue_amount),
+    tenants_overdue: Number(row.tenants_overdue),
 
     /*
       Still owed by tenants who have moved out.
@@ -922,6 +960,14 @@ async function get_report_details(
           tenant_charges.amount_paid
         ) AS balance,
 
+        COALESCE(
+          SUM(
+            tenant_charges.amount_due -
+            tenant_charges.amount_paid
+          ) FILTER (WHERE ${OVERDUE_SQL}),
+          0
+        ) AS overdue,
+
         TO_CHAR(
           MIN(tenant_charges.due_date),
           'YYYY-MM-DD'
@@ -976,6 +1022,7 @@ async function get_report_details(
     arrears: arrears.rows.map((row) => ({
       ...row,
       balance: as_number(row.balance),
+      overdue: as_number(row.overdue),
     })),
   };
 }
@@ -1067,11 +1114,14 @@ async function get_dashboard_report(
         )
       : undefined;
 
-    const sum = (field) =>
-      arrears_by_property.reduce(
-        (total, item) => total + item[field],
-        0
-      );
+    /*
+      The totals come from the same calculation as the dashboard.
+    */
+    const owed = await get_owed_summary(
+      client,
+      access.owner_id,
+      access.property_id
+    );
 
     return {
       property_id:
@@ -1088,10 +1138,12 @@ async function get_dashboard_report(
           Owed by tenants living there now, and separately
           what tenants who moved out still owe.
         */
-        total_arrears: sum("arrears_amount"),
-        total_former_arrears: sum(
-          "former_tenant_arrears"
-        ),
+        total_arrears: owed.owed,
+        total_overdue: owed.overdue,
+        tenants_owing: owed.tenants_owing,
+        tenants_overdue: owed.tenants_overdue,
+        total_former_arrears: owed.former_owed,
+        former_tenants_owing: owed.former_tenants_owing,
         by_property: arrears_by_property,
       },
 
@@ -1365,7 +1417,16 @@ async function get_tenant_statement(
 
     const settlement = settlement_result.rows[0];
 
+    /*
+      The statement as a running account: brought forward, each
+      bill and payment with the balance after it, and the balance
+      at the end.
+    */
+    const ledger = await build_ledger(client, tenant_id, period);
+
     return {
+      ledger,
+
       tenant: {
         id: tenant.id,
 
@@ -1466,6 +1527,12 @@ async function get_tenant_statement(
             ),
             tenant_owes: as_number(
               settlement.tenant_owes
+            ),
+            added_after_settlement: as_number(
+              settlement.added_after_settlement
+            ),
+            refund_paid_amount: as_number(
+              settlement.refund_paid_amount
             ),
             confirmed_on: settlement.confirmed_on,
             refund_paid_on:

@@ -85,6 +85,19 @@ router.post(
   payment_controller.reverse_payment
 );
 
+// "Not a tenant payment", and putting it back.
+router.post(
+  "/payments/:payment_id/dismiss",
+  guard,
+  payment_controller.dismiss_payment
+);
+
+router.post(
+  "/payments/:payment_id/restore",
+  guard,
+  payment_controller.restore_payment
+);
+
 router.get(
   "/tenants/:tenant_id/payments",
   guard,
@@ -110,6 +123,16 @@ router.post(
   "/tenants/:tenant_id/payments/manual",
   manual_payment_guard,
   payment_controller.record_manual_payment
+);
+
+/*
+  Unmatched M-Pesa payments that may be the money about to be
+  recorded by hand, for the Record payment form.
+*/
+router.get(
+  "/tenants/:tenant_id/payments/possible-duplicates",
+  manual_payment_guard,
+  payment_controller.list_possible_duplicates
 );
 
 /*

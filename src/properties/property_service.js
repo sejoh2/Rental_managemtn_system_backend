@@ -1254,9 +1254,12 @@ async function get_property_by_id(owner, property_id) {
           WHERE payments.property_id = $1
             AND payments.status = 'matched'
             AND tenant_charges.charge_type = 'rent'
-            AND payments.received_at >= DATE_TRUNC(
+            AND DATE_TRUNC(
               'month',
-              CURRENT_TIMESTAMP
+              payments.received_at AT TIME ZONE 'Africa/Nairobi'
+            ) = DATE_TRUNC(
+              'month',
+              CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Nairobi'
             )
         ) AS rent_collected_this_month,
 

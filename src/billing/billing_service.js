@@ -1,6 +1,13 @@
 const db = require("../config/db");
 
 const {
+  to_cents,
+  from_cents,
+  cents_to_number,
+  sum_money,
+} = require("../utils/money");
+
+const {
   log_audit,
 } = require("../audit/audit_service");
 
@@ -242,12 +249,12 @@ async function apply_tenant_credits(client, tenant_id) {
     [tenant_id]
   );
 
-  let total_applied = 0;
+  // In whole cents, so what is used and what is left add up exactly.
+  let total_applied_cents = 0;
 
   for (const credit of credits_result.rows) {
-    let remaining_amount = Number(
-      credit.remaining_amount
-    );
+    const starting_cents = to_cents(credit.remaining_amount);
+    let remaining_cents = starting_cents;
 
     const { charge_types, order_sql } = await get_payment_routing(
       client,
@@ -269,21 +276,20 @@ async function apply_tenant_credits(client, tenant_id) {
     );
 
     for (const charge of charges_result.rows) {
-      if (remaining_amount <= 0) {
+      if (remaining_cents <= 0) {
         break;
       }
 
-      const outstanding =
-        Number(charge.amount_due) -
-        Number(charge.amount_paid);
+      const outstanding_cents =
+        to_cents(charge.amount_due) -
+        to_cents(charge.amount_paid);
 
-      if (outstanding <= 0) {
+      if (outstanding_cents <= 0) {
         continue;
       }
 
-      const allocated_amount = Math.min(
-        remaining_amount,
-        outstanding
+      const allocated = from_cents(
+        Math.min(remaining_cents, outstanding_cents)
       );
 
       await client.query(
@@ -293,7 +299,7 @@ async function apply_tenant_credits(client, tenant_id) {
             tenant_charge_id,
             amount
           )
-          VALUES ($1,$2,$3)
+          VALUES ($1,$2,$3::NUMERIC)
           ON CONFLICT (payment_id, tenant_charge_id)
           DO UPDATE SET
             amount =
@@ -303,7 +309,7 @@ async function apply_tenant_credits(client, tenant_id) {
         [
           credit.source_payment_id,
           charge.id,
-          allocated_amount,
+          allocated,
         ]
       );
 
@@ -311,37 +317,34 @@ async function apply_tenant_credits(client, tenant_id) {
         `
           UPDATE tenant_charges
           SET
-            amount_paid = amount_paid + $1,
+            amount_paid = amount_paid + $1::NUMERIC,
             status = CASE
-              WHEN amount_paid + $1 >= amount_due
+              WHEN amount_paid + $1::NUMERIC >= amount_due
               THEN 'paid'
               ELSE 'partial'
             END
           WHERE id = $2
         `,
-        [allocated_amount, charge.id]
+        [allocated, charge.id]
       );
 
-      remaining_amount -= allocated_amount;
-      total_applied += allocated_amount;
+      remaining_cents -= to_cents(allocated);
+      total_applied_cents += to_cents(allocated);
     }
 
-    if (
-      remaining_amount !==
-      Number(credit.remaining_amount)
-    ) {
+    if (remaining_cents !== starting_cents) {
       await client.query(
         `
           UPDATE tenant_credits
-          SET remaining_amount = $1
+          SET remaining_amount = $1::NUMERIC
           WHERE id = $2
         `,
-        [remaining_amount, credit.id]
+        [from_cents(remaining_cents), credit.id]
       );
     }
   }
 
-  return total_applied;
+  return cents_to_number(total_applied_cents);
 }
 
 /*
@@ -950,10 +953,8 @@ async function run_monthly_billing() {
         billed_rows[0]?.billing_period || null,
       charges_created: billed_rows.length,
       tenants_billed: tenant_ids.length,
-      total_billed: billed_rows.reduce(
-        (total, row) =>
-          total + Number(row.amount_due),
-        0
+      total_billed: sum_money(
+        billed_rows.map((row) => row.amount_due)
       ),
       credit_applied,
     };
@@ -981,10 +982,8 @@ async function run_monthly_billing() {
           tenants_billed: new Set(
             owner_rows.map((row) => row.tenant_id)
           ).size,
-          total_billed: owner_rows.reduce(
-            (total, row) =>
-              total + Number(row.amount_due),
-            0
+          total_billed: sum_money(
+            owner_rows.map((row) => row.amount_due)
           ),
         },
       });
@@ -1008,7 +1007,8 @@ async function release_charge_payments(
   charge,
   amount_to_release
 ) {
-  let remaining_to_release = amount_to_release;
+  // In whole cents: a tiny remainder once made the credit fail.
+  let remaining_cents = to_cents(amount_to_release);
 
   const allocations_result = await client.query(
     `
@@ -1022,16 +1022,18 @@ async function release_charge_payments(
   );
 
   for (const allocation of allocations_result.rows) {
-    if (remaining_to_release <= 0) {
+    if (remaining_cents <= 0) {
       break;
     }
 
-    const released_amount = Math.min(
-      remaining_to_release,
-      Number(allocation.amount)
+    const allocation_cents = to_cents(allocation.amount);
+    const released_cents = Math.min(
+      remaining_cents,
+      allocation_cents
     );
+    const released_amount = from_cents(released_cents);
 
-    if (released_amount >= Number(allocation.amount)) {
+    if (released_cents >= allocation_cents) {
       await client.query(
         `
           DELETE FROM payment_allocations
@@ -1043,7 +1045,7 @@ async function release_charge_payments(
       await client.query(
         `
           UPDATE payment_allocations
-          SET amount = amount - $1
+          SET amount = amount - $1::NUMERIC
           WHERE id = $2
         `,
         [released_amount, allocation.id]
@@ -1059,7 +1061,7 @@ async function release_charge_payments(
           original_amount,
           remaining_amount
         )
-        VALUES ($1,$2,$3,$4,$4)
+        VALUES ($1,$2,$3,$4::NUMERIC,$4::NUMERIC)
         ON CONFLICT (source_payment_id)
         DO UPDATE SET
           original_amount =
@@ -1077,7 +1079,7 @@ async function release_charge_payments(
       ]
     );
 
-    remaining_to_release -= released_amount;
+    remaining_cents -= released_cents;
   }
 }
 
@@ -1305,11 +1307,14 @@ async function adjust_move_out_charges(
       target_amount
     );
 
-    if (amount_paid > new_amount_paid) {
+    const released_cents =
+      to_cents(amount_paid) - to_cents(new_amount_paid);
+
+    if (released_cents > 0) {
       await release_charge_payments(
         client,
         charge,
-        amount_paid - new_amount_paid
+        from_cents(released_cents)
       );
     }
 
@@ -1345,7 +1350,7 @@ async function adjust_move_out_charges(
       description: charge.description,
       previous_amount: amount_due,
       amount: target_amount,
-      credited_to_tenant: amount_paid - new_amount_paid,
+      credited_to_tenant: cents_to_number(released_cents),
     });
   }
 
