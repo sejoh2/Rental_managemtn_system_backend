@@ -1,6 +1,14 @@
 const db = require("../config/db");
 
 const {
+  to_cents,
+  from_cents,
+  cents_to_number,
+  water_bill,
+  units_between,
+} = require("../utils/money");
+
+const {
   log_audit,
 } = require("../audit/audit_service");
 
@@ -605,11 +613,14 @@ async function edit_meter_reading(
       throw error;
     }
 
-    const units_used = current_reading - previous_reading;
+    const units_used = units_between(previous_reading, current_reading);
     const rate_per_unit = Number(reading.rate_per_unit);
 
-    const bill_amount = Number(
-      (units_used * rate_per_unit).toFixed(2)
+    // To the cent, in whole numbers (see utils/money.js).
+    const bill_amount = water_bill(
+      previous_reading,
+      current_reading,
+      rate_per_unit
     );
 
     let charge = null;
@@ -655,17 +666,16 @@ async function edit_meter_reading(
           : Number(charge.amount_paid);
 
       const new_paid = Math.min(paid, bill_amount);
+      const returned_cents = to_cents(paid) - to_cents(new_paid);
 
-      if (paid > new_paid) {
+      if (returned_cents > 0) {
         await release_charge_payments(
           client,
           charge,
-          paid - new_paid
+          from_cents(returned_cents)
         );
 
-        credit_returned = Number(
-          (paid - new_paid).toFixed(2)
-        );
+        credit_returned = cents_to_number(returned_cents);
       }
 
       if (bill_amount <= 0) {
@@ -1203,17 +1213,16 @@ async function submit_meter_reading(
 
     const units_used = suspicious
       ? null
-      : current_reading - previous_reading;
+      : units_between(previous_reading, current_reading);
 
     const rate_per_unit = suspicious
       ? null
       : Number(unit.water_rate_per_unit);
 
+    // To the cent, in whole numbers (see utils/money.js).
     const bill_amount = suspicious
       ? null
-      : Number(
-        (units_used * rate_per_unit).toFixed(2)
-      );
+      : water_bill(previous_reading, current_reading, rate_per_unit);
 
     /*
       The reading's ID is made first: a final reading's bill
@@ -1545,15 +1554,16 @@ async function review_meter_reading(
 
     const unit = unit_result.rows[0];
 
-    const units_used =
-      corrected_current_reading -
-      Number(reading.previous_reading);
+    const units_used = units_between(
+      reading.previous_reading,
+      corrected_current_reading
+    );
 
-    const bill_amount = Number(
-      (
-        units_used *
-        Number(unit.water_rate_per_unit)
-      ).toFixed(2)
+    // To the cent, in whole numbers (see utils/money.js).
+    const bill_amount = water_bill(
+      reading.previous_reading,
+      corrected_current_reading,
+      unit.water_rate_per_unit
     );
 
     const charge = await create_water_charge(

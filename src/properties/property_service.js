@@ -1,6 +1,14 @@
 const db = require("../config/db");
 
 const {
+  resolve_charge_accounts,
+} = require("../billing/billing_service");
+
+const {
+  CHARGE_ACCOUNT_SETTINGS,
+} = require("./property_validator");
+
+const {
   encrypt_json,
   decrypt_json,
 } = require("../utils/crypto");
@@ -125,6 +133,23 @@ function public_property(
     */
     service_charge_account:
       property.service_charge_account,
+
+    // The account chosen for water and electricity when they have none of their own.
+    water_charge_account: property.water_charge_account,
+    electricity_charge_account: property.electricity_charge_account,
+
+    /*
+      The account each kind of bill is actually paid into right
+      now, for example { rent: 'rent', water: 'rent',
+      electricity: 'electricity', service: 'water' }.
+    */
+    charge_accounts: resolve_charge_accounts(
+      accounts.map((account) => account.account_for),
+      property
+    ),
+
+    // 'fixed' or 'oldest': how a payment short of every bill is shared out.
+    payment_order: property.payment_order,
 
     /*
       Lets the Properties page render its cards and details
@@ -604,11 +629,15 @@ async function create_property(owner, data, ip_address) {
           sms_sender_id,
           service_charge_account,
           electricity_billing_method,
-          electricity_monthly_charge
+          electricity_monthly_charge,
+          water_charge_account,
+          electricity_charge_account,
+          payment_order
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16,$17,$18,$19
+          $11,$12,$13,$14,$15,$16,$17,$18,$19,
+          $20,$21,$22
         )
         RETURNING id
       `,
@@ -633,6 +662,9 @@ async function create_property(owner, data, ip_address) {
         data.service_connection_id ? "service" : data.service_charge_account,
         data.electricity_billing_method,
         data.electricity_billing_method === "fixed_monthly" ? data.electricity_monthly_charge : 0,
+        data.water_connection_id ? "water" : data.water_charge_account,
+        data.electricity_connection_id ? "electricity" : data.electricity_charge_account,
+        data.payment_order,
       ]
     );
 
@@ -725,6 +757,9 @@ async function update_property(
     "move_out_billing",
     "sms_sender_id",
     "service_charge_account",
+    "water_charge_account",
+    "electricity_charge_account",
+    "payment_order",
     "electricity_billing_method",
     "electricity_monthly_charge",
   ];
@@ -756,46 +791,51 @@ async function update_property(
   }
 
   /*
-    Service charges are paid into one account only: their own
+    Each kind of bill is paid into one account only: its own
     account when the property has one, otherwise the account
     chosen here, which the property must actually have.
   */
-  if (data.service_charge_account && data.service_charge_account !== "service") {
-    const { account: service_account } = await get_property_payment_account(
-      db,
-      owner.user_id,
-      property_id,
-      "service"
-    );
+  for (const [field, own, label] of CHARGE_ACCOUNT_SETTINGS) {
+    const chosen = data[field];
 
-    if (service_account && service_account.status === "active") {
-      const error = new Error(
-        "This property has its own service charges account, so service charges and repairs are paid there. Remove that account to have them paid into another one."
-      );
-
-      error.status_code = 422;
-      throw error;
+    if (!chosen) {
+      continue;
     }
-  }
 
-  if (
-    data.service_charge_account &&
-    data.service_charge_account !== "rent"
-  ) {
-    const { account } = await get_property_payment_account(
-      db,
-      owner.user_id,
-      property_id,
-      data.service_charge_account
-    );
-
-    if (!account || account.status !== "active") {
-      const error = new Error(
-        "Connect that account first, or have service charges paid into the rent account."
+    if (chosen !== own) {
+      const { account: own_account } = await get_property_payment_account(
+        db,
+        owner.user_id,
+        property_id,
+        own
       );
 
-      error.status_code = 422;
-      throw error;
+      if (own_account && own_account.status === "active") {
+        const error = new Error(
+          `This property has its own ${label} account, so ${label} ${label.endsWith("s") ? "are" : "is"} paid there. Remove that account to have ${label} paid into another one.`
+        );
+
+        error.status_code = 422;
+        throw error;
+      }
+    }
+
+    if (chosen !== "rent") {
+      const { account } = await get_property_payment_account(
+        db,
+        owner.user_id,
+        property_id,
+        chosen
+      );
+
+      if (!account || account.status !== "active") {
+        const error = new Error(
+          `Connect that account first, or have ${label} paid into the rent account.`
+        );
+
+        error.status_code = 422;
+        throw error;
+      }
     }
   }
 
@@ -1035,11 +1075,13 @@ async function replace_payment_account(
       [connection_id]
     );
 
-    // A service charges account of its own: service charges are paid there only from now on.
-    if (account_for === "service") {
+    // An account of their own: those bills are paid there only from now on.
+    const own_setting = CHARGE_ACCOUNT_SETTINGS.find(([, own]) => own === account_for);
+
+    if (own_setting) {
       await client.query(
-        "UPDATE properties SET service_charge_account = 'service' WHERE id = $1",
-        [property_id]
+        `UPDATE properties SET ${own_setting[0]} = $2 WHERE id = $1`,
+        [property_id, account_for]
       );
     }
 
@@ -1112,15 +1154,17 @@ async function remove_payment_account(
   );
 
   /*
-    Service charges that were paid into this account go
-    back to the rent account.
+    Bills that were paid into this account (its own, and any
+    that used it) go back to the rent account.
   */
   await db.query(
     `
       UPDATE properties
-      SET service_charge_account = 'rent'
+      SET
+        service_charge_account = CASE WHEN service_charge_account = $2 THEN 'rent' ELSE service_charge_account END,
+        water_charge_account = CASE WHEN water_charge_account = $2 THEN 'rent' ELSE water_charge_account END,
+        electricity_charge_account = CASE WHEN electricity_charge_account = $2 THEN 'rent' ELSE electricity_charge_account END
       WHERE id = $1
-        AND service_charge_account = $2
     `,
     [property_id, account_for]
   );
@@ -1210,9 +1254,12 @@ async function get_property_by_id(owner, property_id) {
           WHERE payments.property_id = $1
             AND payments.status = 'matched'
             AND tenant_charges.charge_type = 'rent'
-            AND payments.received_at >= DATE_TRUNC(
+            AND DATE_TRUNC(
               'month',
-              CURRENT_TIMESTAMP
+              payments.received_at AT TIME ZONE 'Africa/Nairobi'
+            ) = DATE_TRUNC(
+              'month',
+              CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Nairobi'
             )
         ) AS rent_collected_this_month,
 

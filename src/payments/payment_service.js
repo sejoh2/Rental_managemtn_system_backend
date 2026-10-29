@@ -17,10 +17,25 @@ const {
 } = require("../audit/audit_service");
 
 const {
-  charge_priority_order_sql,
-  get_payable_charge_types,
+  get_payment_routing,
   apply_tenant_credits,
 } = require("../billing/billing_service");
+
+const {
+  to_cents,
+  from_cents,
+} = require("../utils/money");
+
+const {
+  add_to_settlement_refund,
+  refresh_settlement,
+  check_payment_can_be_reversed,
+  take_back_settlement_refund,
+} = require("../deposits/settlement_live");
+
+const {
+  mpesa_paid_at,
+} = require("./mpesa/mpesa_time");
 
 function public_payment(payment) {
   return {
@@ -69,6 +84,19 @@ function public_payment(payment) {
 
     reversed_at: payment.reversed_at || null,
     reverse_reason: payment.reverse_reason || null,
+
+    // When Kodi heard of an M-Pesa payment; received_at is when it was paid.
+    notified_at: payment.notified_at || null,
+
+    // "Not a tenant payment"
+    dismissed_at: payment.dismissed_at || null,
+    dismiss_reason: payment.dismiss_reason || null,
+
+    // A former tenant's extra, added to the refund owed to them.
+    added_to_refund: Number(payment.added_to_refund || 0),
+
+    duplicate_override_reason:
+      payment.duplicate_override_reason || null,
 
     applied_to: payment.applied_to || [],
   };
@@ -171,49 +199,55 @@ async function apply_payment_to_tenant(
   payment,
   tenant
 ) {
-  let remaining_amount = Number(payment.amount);
+  // In whole cents, so the split always adds up exactly.
+  let remaining_cents = to_cents(payment.amount);
 
-  const priorities = await get_payable_charge_types(
+  const routing = await get_payment_routing(
     client,
     tenant.property_id,
     payment.account_for
   );
+
+  /*
+    A tenant who has moved out has no accounts to keep apart:
+    whatever they pay settles what they still owe, in the
+    property's order, whichever account it came into.
+  */
+  const moved_out = tenant.status === "moved_out";
 
   const charges_result = await client.query(
     `
       SELECT *
       FROM tenant_charges
       WHERE tenant_id = $1
-        AND charge_type = ANY($2)
+        AND ($3 OR charge_type = ANY($2))
         AND status IN ('open', 'partial')
-      ORDER BY
-        ${charge_priority_order_sql},
-        due_date ASC,
-        id ASC
+      ORDER BY ${routing.order_sql}
       FOR UPDATE
     `,
     [
       tenant.id,
-      priorities,
+      routing.charge_types,
+      moved_out,
     ]
   );
 
   for (const charge of charges_result.rows) {
-    if (remaining_amount <= 0) {
+    if (remaining_cents <= 0) {
       break;
     }
 
-    const outstanding =
-      Number(charge.amount_due) -
-      Number(charge.amount_paid);
+    const outstanding_cents =
+      to_cents(charge.amount_due) -
+      to_cents(charge.amount_paid);
 
-    if (outstanding <= 0) {
+    if (outstanding_cents <= 0) {
       continue;
     }
 
-    const allocated_amount = Math.min(
-      remaining_amount,
-      outstanding
+    const allocated_cents = Math.min(
+      remaining_cents,
+      outstanding_cents
     );
 
     await client.query(
@@ -223,62 +257,82 @@ async function apply_payment_to_tenant(
           tenant_charge_id,
           amount
         )
-        VALUES ($1,$2,$3)
+        VALUES ($1,$2,$3::NUMERIC)
       `,
       [
         payment.id,
         charge.id,
-        allocated_amount,
+        from_cents(allocated_cents),
       ]
     );
-
-    const new_paid_amount =
-      Number(charge.amount_paid) +
-      allocated_amount;
 
     await client.query(
       `
         UPDATE tenant_charges
         SET
-          amount_paid = $1,
+          amount_paid = $1::NUMERIC,
           status = CASE
-            WHEN $1 >= amount_due THEN 'paid'
+            WHEN $1::NUMERIC >= amount_due THEN 'paid'
             ELSE 'partial'
           END
         WHERE id = $2
       `,
       [
-        new_paid_amount,
+        from_cents(
+          to_cents(charge.amount_paid) + allocated_cents
+        ),
         charge.id,
       ]
     );
 
-    remaining_amount -= allocated_amount;
+    remaining_cents -= allocated_cents;
   }
 
   /*
-    Excess money remains as a tenant credit. It is not lost.
-    Future monthly charges will use this credit first.
+    Money left over is not lost.
+    - A former tenant whose deposits are already settled is
+      owed it back: it is added to their refund (the owner's
+      rule, 2026-10-29).
+    - Anyone else keeps it as credit, which pays their next
+      bills first.
   */
-  if (remaining_amount > 0) {
-    await client.query(
-      `
-        INSERT INTO tenant_credits (
-          tenant_id,
-          property_id,
-          source_payment_id,
-          original_amount,
-          remaining_amount
+  if (remaining_cents > 0) {
+    const added_to_refund = moved_out
+      ? await add_to_settlement_refund(
+          client,
+          tenant.id,
+          payment.id,
+          remaining_cents
         )
-        VALUES ($1,$2,$3,$4,$4)
-      `,
-      [
-        tenant.id,
-        tenant.property_id,
-        payment.id,
-        remaining_amount,
-      ]
-    );
+      : false;
+
+    if (!added_to_refund) {
+      await client.query(
+        `
+          INSERT INTO tenant_credits (
+            tenant_id,
+            property_id,
+            source_payment_id,
+            original_amount,
+            remaining_amount
+          )
+          VALUES ($1,$2,$3,$4::NUMERIC,$4::NUMERIC)
+        `,
+        [
+          tenant.id,
+          tenant.property_id,
+          payment.id,
+          from_cents(remaining_cents),
+        ]
+      );
+    }
+  }
+
+  /*
+    A settled former tenant's figures follow what they pay.
+  */
+  if (moved_out) {
+    await refresh_settlement(client, tenant.id);
   }
 
   await client.query(
@@ -400,8 +454,37 @@ async function receive_mpesa_c2b_confirmation(payload) {
       if (!tenant) {
         unmatched_reason =
           "No active tenant in this property is registered with this payment phone.";
+
+        /*
+          Never matched to a former tenant by itself (a new tenant
+          may have taken the number), but the owner is told whose
+          it was, so they can match it in one click.
+        */
+        const former = await client.query(
+          `
+            SELECT full_name
+            FROM tenants
+            WHERE property_id = $1
+              AND status = 'moved_out'
+              AND payment_phone = $2
+            ORDER BY move_out_date DESC NULLS LAST, id DESC
+            LIMIT 1
+          `,
+          [account.property_id, payer_phone]
+        );
+
+        if (former.rows[0]) {
+          unmatched_reason = `This number belongs to ${former.rows[0].full_name}, who has moved out. Match it to them if it is their payment.`;
+        }
       }
     }
+
+    /*
+      When the tenant paid, by M-Pesa's own clock; when Kodi
+      heard of it is kept separately.
+    */
+    const notified_at = new Date();
+    const received_at = mpesa_paid_at(payload.TransTime, notified_at);
 
     const payment_result = await client.query(
       `
@@ -421,12 +504,14 @@ async function receive_mpesa_c2b_confirmation(payload) {
           status,
           match_type,
           unmatched_reason,
-          provider_payload
+          provider_payload,
+          received_at,
+          notified_at
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,
           'mpesa','mpesa_c2b',$8,$9,$10,
-          $11,$12,$13,$14
+          $11,$12,$13,$14,$15,$16
         )
         RETURNING *
       `,
@@ -445,6 +530,8 @@ async function receive_mpesa_c2b_confirmation(payload) {
         tenant ? "automatic" : null,
         unmatched_reason,
         JSON.stringify(payload),
+        received_at,
+        notified_at,
       ]
     );
 
@@ -535,7 +622,7 @@ async function match_unmatched_payment(
         WHERE id = $1
           AND owner_id = $2
           AND property_id = $3
-          AND status IN ('active', 'notice_given')
+          AND status IN ('active', 'notice_given', 'moved_out')
         FOR UPDATE
       `,
       [
@@ -549,7 +636,7 @@ async function match_unmatched_payment(
 
     if (!tenant) {
       const error = new Error(
-        "Choose an active tenant from the same property."
+        "Choose a tenant of the same property, current or former."
       );
 
       error.status_code = 422;
@@ -558,9 +645,11 @@ async function match_unmatched_payment(
 
     /*
       The number it replaces is kept on the payment, so that
-      unassigning the payment can put it back.
+      unassigning the payment can put it back. A former tenant's
+      number is never remembered: it no longer matches anything.
     */
     const replaces_phone =
+      tenant.status !== "moved_out" &&
       remember_payment_phone &&
       payment.payer_phone &&
       payment.payer_phone !== tenant.payment_phone;
@@ -683,6 +772,12 @@ async function reverse_payment(
       throw error;
     }
 
+    /*
+      A payment the deposit settlement was worked out from waits
+      until the owner reopens it (the owner's rule, 2026-10-29).
+    */
+    await check_payment_can_be_reversed(client, payment);
+
     const allocations_result = await client.query(
       `
         SELECT *
@@ -698,10 +793,10 @@ async function reverse_payment(
         `
           UPDATE tenant_charges
           SET
-            amount_paid = amount_paid - $1,
+            amount_paid = amount_paid - $1::NUMERIC,
             status = CASE
               WHEN status = 'void' THEN 'void'
-              WHEN amount_paid - $1 <= 0 THEN 'open'
+              WHEN amount_paid - $1::NUMERIC <= 0 THEN 'open'
               ELSE 'partial'
             END
           WHERE id = $2
@@ -732,6 +827,9 @@ async function reverse_payment(
     */
     if (payment.tenant_id) {
       await apply_tenant_credits(client, payment.tenant_id);
+
+      // A settled former tenant's refund and debt follow.
+      await take_back_settlement_refund(client, payment);
     }
 
     const is_manual = payment.payment_source === "manual";
@@ -853,6 +951,293 @@ async function reverse_payment(
   }
 }
 
+/*
+  M-Pesa receipt numbers are ten letters and digits, such as
+  TJU4K8P2QX. Spaces are dropped and letters made capitals.
+*/
+function normalize_receipt(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
+function payment_error(message, status_code, details) {
+  const error = new Error(message);
+
+  error.status_code = status_code;
+  error.details = details;
+  return error;
+}
+
+function duplicate_summary(row) {
+  return {
+    id: row.id,
+    amount: Number(row.amount),
+    provider_transaction_id: row.provider_transaction_id,
+    payer_phone: row.payer_phone,
+    received_at: row.received_at,
+    received_at_local: row.received_at_local,
+    status: row.status,
+    tenant_name: row.tenant_name || null,
+    reasons: row.reasons || [],
+  };
+}
+
+/*
+  Unmatched M-Pesa payments in the tenant's property that may be
+  the money being recorded by hand. Each carries why:
+  - 'receipt': its receipt number is the one typed;
+  - 'phone': it came from the tenant's number, or a number they
+    paid from before;
+  - 'amount': the same amount, in the last 30 days.
+  A receipt or phone match is strong; an amount alone is a hint.
+*/
+async function find_possible_duplicates(
+  client,
+  owner_id,
+  tenant,
+  { amount, reference }
+) {
+  const receipt = normalize_receipt(reference);
+
+  const result = await client.query(
+    `
+      WITH tenant_phones AS (
+        SELECT $3::VARCHAR AS phone
+        UNION
+        SELECT DISTINCT payer_phone
+        FROM payments
+        WHERE tenant_id = $4
+          AND payer_phone IS NOT NULL
+      )
+      SELECT
+        payments.*,
+        TO_CHAR(
+          payments.received_at AT TIME ZONE 'Africa/Nairobi',
+          'YYYY-MM-DD HH24:MI'
+        ) AS received_at_local,
+
+        ARRAY_REMOVE(ARRAY[
+          CASE
+            WHEN $5 <> ''
+              AND UPPER(payments.provider_transaction_id) = $5
+            THEN 'receipt'
+          END,
+          CASE
+            WHEN payments.payer_phone IN (SELECT phone FROM tenant_phones)
+            THEN 'phone'
+          END,
+          CASE
+            WHEN $6::NUMERIC IS NOT NULL
+              AND payments.amount = $6::NUMERIC
+            THEN 'amount'
+          END
+        ], NULL) AS reasons
+
+      FROM payments
+      WHERE payments.owner_id = $1
+        AND payments.property_id = $2
+        AND payments.status = 'unmatched'
+        AND (
+          ($5 <> '' AND UPPER(payments.provider_transaction_id) = $5)
+          OR (
+            payments.received_at >=
+              CURRENT_TIMESTAMP - INTERVAL '30 days'
+            AND (
+              payments.payer_phone IN (SELECT phone FROM tenant_phones)
+              OR (
+                $6::NUMERIC IS NOT NULL
+                AND payments.amount = $6::NUMERIC
+              )
+            )
+          )
+        )
+      ORDER BY
+        COALESCE(
+          UPPER(payments.provider_transaction_id) = $5,
+          FALSE
+        ) DESC,
+        payments.received_at DESC
+      LIMIT 5
+    `,
+    [
+      owner_id,
+      tenant.property_id,
+      tenant.payment_phone,
+      tenant.id,
+      receipt,
+      amount ? String(amount) : null,
+    ]
+  );
+
+  return result.rows.map(duplicate_summary);
+}
+
+/*
+  A payment with this M-Pesa receipt already counted for someone:
+  an M-Pesa payment matched to a tenant, or one typed in by hand.
+*/
+async function find_recorded_receipt(client, owner_id, receipt) {
+  if (!receipt) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT
+        payments.*,
+        tenants.full_name AS tenant_name,
+        TO_CHAR(
+          payments.received_at AT TIME ZONE 'Africa/Nairobi',
+          'DD Mon YYYY'
+        ) AS received_on
+      FROM payments
+      LEFT JOIN tenants
+        ON tenants.id = payments.tenant_id
+      WHERE payments.owner_id = $1
+        AND payments.status = 'matched'
+        AND (
+          UPPER(payments.provider_transaction_id) = $2
+          OR (
+            payments.payment_method = 'mpesa'
+            AND UPPER(REPLACE(payments.reference, ' ', '')) = $2
+          )
+        )
+      LIMIT 1
+    `,
+    [owner_id, receipt]
+  );
+
+  return result.rows[0] || null;
+}
+
+// For the Record payment form, before saving.
+async function list_possible_duplicates(owner, tenant_id, query) {
+  const tenant_result = await db.query(
+    `
+      SELECT *
+      FROM tenants
+      WHERE id = $1
+        AND owner_id = $2
+    `,
+    [tenant_id, owner.user_id]
+  );
+
+  const tenant = tenant_result.rows[0];
+
+  if (!tenant) {
+    throw payment_error("Tenant not found.", 404);
+  }
+
+  const receipt = normalize_receipt(query.reference);
+
+  const recorded = await find_recorded_receipt(
+    db,
+    owner.user_id,
+    receipt
+  );
+
+  return {
+    already_recorded: recorded
+      ? {
+          id: recorded.id,
+          tenant_name: recorded.tenant_name,
+          received_on: recorded.received_on,
+          amount: Number(recorded.amount),
+        }
+      : null,
+    candidates: await find_possible_duplicates(
+      db,
+      owner.user_id,
+      tenant,
+      query
+    ),
+  };
+}
+
+/*
+  "Not a tenant payment": an unmatched M-Pesa payment that is no
+  tenant's (a wrong number, the owner's own money). It leaves the
+  unmatched list and the money received, and can be put back.
+*/
+async function dismiss_payment(owner, payment_id, reason, ip_address) {
+  const result = await db.query(
+    `
+      UPDATE payments
+      SET
+        status = 'dismissed',
+        dismissed_at = CURRENT_TIMESTAMP,
+        dismissed_by = $3,
+        dismiss_reason = $4
+      WHERE id = $1
+        AND owner_id = $2
+        AND status = 'unmatched'
+      RETURNING id, amount, provider_transaction_id
+    `,
+    [payment_id, owner.user_id, owner.user_id, reason]
+  );
+
+  if (!result.rows[0]) {
+    throw payment_error(
+      "Only an unmatched payment can be marked as not a tenant payment.",
+      409
+    );
+  }
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "PAYMENT_DISMISSED",
+    entity_type: "payment",
+    entity_id: payment_id,
+    metadata: {
+      amount: Number(result.rows[0].amount),
+      provider_transaction_id: result.rows[0].provider_transaction_id,
+      reason,
+    },
+    ip_address,
+  });
+
+  return get_payment_by_id(owner, payment_id);
+}
+
+async function restore_payment(owner, payment_id, ip_address) {
+  const result = await db.query(
+    `
+      UPDATE payments
+      SET
+        status = 'unmatched',
+        dismissed_at = NULL,
+        dismissed_by = NULL,
+        dismiss_reason = NULL
+      WHERE id = $1
+        AND owner_id = $2
+        AND status = 'dismissed'
+      RETURNING id, amount
+    `,
+    [payment_id, owner.user_id]
+  );
+
+  if (!result.rows[0]) {
+    throw payment_error(
+      "Only a payment marked as not a tenant payment can be put back.",
+      409
+    );
+  }
+
+  await log_audit({
+    user_id: owner.user_id,
+    action: "PAYMENT_RESTORED",
+    entity_type: "payment",
+    entity_id: payment_id,
+    metadata: {
+      amount: Number(result.rows[0].amount),
+    },
+    ip_address,
+  });
+
+  return get_payment_by_id(owner, payment_id);
+}
+
 async function record_manual_payment(
   owner,
   tenant_id,
@@ -894,6 +1279,81 @@ async function record_manual_payment(
       throw error;
     }
 
+    /*
+      M-Pesa money must carry its receipt number (the owner's
+      rule, 2026-10-29), so the same money is never counted twice.
+    */
+    const receipt =
+      data.payment_method === "mpesa"
+        ? normalize_receipt(data.reference)
+        : "";
+
+    if (
+      data.payment_method === "mpesa" &&
+      !/^[A-Z0-9]{8,12}$/.test(receipt)
+    ) {
+      throw payment_error(
+        "Enter the M-Pesa receipt number, for example TJU4K8P2QX. It is in the tenant's M-Pesa message.",
+        422,
+        { code: "receipt_required" }
+      );
+    }
+
+    const recorded = await find_recorded_receipt(
+      client,
+      owner.user_id,
+      receipt
+    );
+
+    if (recorded) {
+      throw payment_error(
+        `M-Pesa receipt ${receipt} is already recorded, for ${recorded.tenant_name || "a tenant"}, on ${recorded.received_on}.`,
+        409,
+        { code: "receipt_recorded", payment_id: recorded.id }
+      );
+    }
+
+    /*
+      An unmatched M-Pesa payment that may be this money: the
+      owner matches it instead, or says why this is a different
+      payment. A receipt or phone match must be answered; the same
+      amount alone is only shown in the form.
+    */
+    const candidates = await find_possible_duplicates(
+      client,
+      owner.user_id,
+      tenant,
+      { amount: data.amount, reference: receipt }
+    );
+
+    const strong = candidates.filter((candidate) =>
+      candidate.reasons.some((reason) =>
+        ["receipt", "phone"].includes(reason)
+      )
+    );
+
+    const exact_receipt = candidates.find((candidate) =>
+      candidate.reasons.includes("receipt")
+    );
+
+    if (exact_receipt) {
+      throw payment_error(
+        `M-Pesa receipt ${receipt} is already in Kodi as an unmatched payment of KES ${exact_receipt.amount.toLocaleString("en-KE")}. Match that payment to ${tenant.full_name} instead of recording it again.`,
+        409,
+        { code: "unmatched_receipt", candidates: [exact_receipt] }
+      );
+    }
+
+    if (strong.length && !data.duplicate_override_reason) {
+      const first = strong[0];
+
+      throw payment_error(
+        `This may already be in Kodi: an unmatched M-Pesa payment of KES ${first.amount.toLocaleString("en-KE")} from ${first.payer_phone || "an unknown number"} on ${first.received_at_local}. Match that payment to ${tenant.full_name}, or say why this is a different payment.`,
+        409,
+        { code: "possible_duplicate", candidates }
+      );
+    }
+
     const payment_result = await client.query(
       `
         INSERT INTO payments (
@@ -910,12 +1370,13 @@ async function record_manual_payment(
           status,
           match_type,
           recorded_by,
-          notes
+          notes,
+          duplicate_override_reason
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,'manual',
+          $1,$2,$3,$4,$5,$6::NUMERIC,$7,'manual',
           $8,COALESCE($9, CURRENT_TIMESTAMP),
-          'matched','manual',$11,$10
+          'matched','manual',$11,$10,$12
         )
         RETURNING *
       `,
@@ -925,15 +1386,18 @@ async function record_manual_payment(
         tenant.unit_id,
         tenant.id,
         data.account_for,
-        data.amount,
+        from_cents(to_cents(data.amount)),
         data.payment_method,
-        data.reference || null,
+        receipt || data.reference || null,
         data.received_at || null,
         data.notes || null,
         /*
           Who recorded it: the caretaker, when one did.
         */
         owner.acting_caretaker_id || owner.user_id,
+        candidates.length
+          ? data.duplicate_override_reason || null
+          : null,
       ]
     );
 
@@ -956,6 +1420,16 @@ async function record_manual_payment(
         tenant_id: tenant.id,
         amount: payment.amount,
         payment_method: payment.payment_method,
+        reference: payment.reference,
+        /*
+          Kodi showed unmatched payments that looked like this
+          money, and the owner said it was a different payment.
+        */
+        possible_duplicates_shown: candidates.map(
+          (candidate) => candidate.id
+        ),
+        duplicate_override_reason:
+          payment.duplicate_override_reason || null,
       },
       ip_address,
     });
@@ -1343,6 +1817,9 @@ module.exports = {
   receive_mpesa_c2b_confirmation,
   match_unmatched_payment,
   record_manual_payment,
+  list_possible_duplicates,
+  dismiss_payment,
+  restore_payment,
   reverse_payment,
   get_payment_by_id,
   list_payments,

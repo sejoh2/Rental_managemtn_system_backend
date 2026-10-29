@@ -50,6 +50,43 @@ jobs:
       - name: Tests
         run: npm test
 
+  money:
+    name: Money adds up
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: money_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # A throwaway database for this run only. The tests refuse any address
+    # that is not on this machine.
+    env:
+      MONEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/money_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Payments, credit, deposits, statements, the dashboard and reports,
+      # through the real API: every shilling received is accounted for.
+      - name: Money tests
+        run: node --test --test-concurrency=1
+
   dependencies:
     name: Known vulnerabilities in dependencies
     runs-on: ubuntu-latest

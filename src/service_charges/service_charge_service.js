@@ -1,5 +1,7 @@
 const db = require("../config/db");
 
+const { sum_money } = require("../utils/money");
+
 const {
   log_audit,
 } = require("../audit/audit_service");
@@ -330,9 +332,8 @@ async function create_service_charge(
 
     const billing = {
       tenants_billed: tenant_ids.length,
-      total_billed: billed.reduce(
-        (total, row) => total + Number(row.amount_due),
-        0
+      total_billed: sum_money(
+        billed.map((row) => row.amount_due)
       ),
     };
 
