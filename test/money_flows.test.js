@@ -173,8 +173,21 @@ test("a payment over bills with cents is recorded, not lost", async () => {
   const t = await make_tenant(p, "C1");
   const a = await bill(t, "rent", "1234.56");
   const b = await bill(t, "rent", "65.44", { period: month_start(0), due: month_start(0) });
+
+  // Every notice leaves one line in the server log, without names or phones.
+  const lines = [];
+  const log = console.log;
+  console.log = (...args) => { lines.push(args.join(" ")); log(...args); };
   const res = await c2b(t, 1300);
+  const again = await c2b(t, 1300, { trans: res.trans });
+  console.log = log;
   assert.equal(res.status, 200);
+  assert.equal(again.status, 200);
+  const notice = lines.filter((line) => line.startsWith("[MPESA] Payment notice for"));
+  assert.equal(notice.length, 2, JSON.stringify(lines));
+  assert.match(notice[0], /KES 1,300 \(TST\d+\): matched to house C1 \(pay_/);
+  assert.match(notice[1], /sent again, already recorded/);
+  assert.ok(!notice.join(" ").includes(t.payment_phone.slice(1)));
   const payment = await payment_by_receipt(res.trans);
   assert.equal(payment?.status, "matched");
   assert.equal((await charge(a)).status, "paid");
