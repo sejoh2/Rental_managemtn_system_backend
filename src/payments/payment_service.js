@@ -353,6 +353,11 @@ async function apply_payment_to_tenant(
   );
 }
 
+// One line in the server log for every payment notice (no names or phones).
+const {
+  notice_log_line,
+} = require("./mpesa/notice_log");
+
 async function receive_mpesa_c2b_confirmation(payload) {
   const provider_transaction_id = String(
     payload.TransID || ""
@@ -396,6 +401,10 @@ async function receive_mpesa_c2b_confirmation(payload) {
     */
     if (existing.rows[0]) {
       await client.query("COMMIT");
+
+      console.log(
+        notice_log_line(payload, `sent again, already recorded (${existing.rows[0].id})`)
+      );
 
       return {
         duplicate: true,
@@ -545,7 +554,31 @@ async function receive_mpesa_c2b_confirmation(payload) {
       );
     }
 
+    const unit_number = tenant
+      ? (
+          await client.query(
+            "SELECT unit_number FROM units WHERE id = $1",
+            [tenant.unit_id]
+          )
+        ).rows[0]?.unit_number
+      : null;
+
     await client.query("COMMIT");
+
+    console.log(
+      notice_log_line(
+        payload,
+        tenant
+          ? `matched to house ${unit_number || "?"} (${payment.id})`
+          : `unmatched (${payment.id}): ${
+              !account
+                ? "no active Kodi payment account has this business number"
+                : !payer_phone
+                  ? "M-Pesa sent no valid phone number"
+                  : "no current tenant of the property pays from this number"
+            }`
+      )
+    );
 
     /*
       Received automatically from Safaricom, so there is no
@@ -1815,6 +1848,7 @@ async function simulate_sandbox_payment(
 
 module.exports = {
   receive_mpesa_c2b_confirmation,
+  notice_log_line,
   match_unmatched_payment,
   record_manual_payment,
   list_possible_duplicates,

@@ -327,6 +327,12 @@ async function c2b_confirmation(req, res, next) {
 
     return accepted(res);
   } catch (error) {
+    console.error(
+      payment_service.notice_log_line(
+        req.body,
+        `could not be recorded: ${error.message}`
+      )
+    );
     next(error);
   }
 }

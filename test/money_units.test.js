@@ -49,6 +49,20 @@ test("a payment at 23:58 keeps its day when the notice comes after midnight", ()
   assert.equal(paid.toISOString(), "2026-10-31T20:58:40.000Z");
 });
 
+test("every payment notice gets one log line, without names or phone numbers", () => {
+  const { notice_log_line } = require("../src/payments/mpesa/notice_log");
+  const payload = { BusinessShortCode: "600996", TransAmount: "8000", TransID: "TJU4K8P2QX", MSISDN: "254708374149", FirstName: "JANE" };
+
+  const line = notice_log_line(payload, "matched to house A1 (pay_1)");
+  assert.equal(line, "[MPESA] Payment notice for 600996, KES 8,000 (TJU4K8P2QX): matched to house A1 (pay_1)");
+  assert.ok(!line.includes("254708374149") && !line.includes("JANE"));
+
+  assert.equal(
+    notice_log_line({}, "could not be recorded: Invalid M-Pesa C2B confirmation payload."),
+    "[MPESA] Payment notice for ?, an unknown amount (?): could not be recorded: Invalid M-Pesa C2B confirmation payload."
+  );
+});
+
 test("an M-Pesa time that cannot be right falls back to the arrival time", () => {
   const now = new Date("2026-10-29T09:00:00.000Z");
   assert.equal(mpesa_paid_at("20261231120000", now), now); // in the future
